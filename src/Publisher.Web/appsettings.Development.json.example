@@ -2,8 +2,8 @@
   // Copy this file to `appsettings.Development.json` (which is gitignored) for local dev.
   // In production, supply these via environment variables instead — never commit real secrets.
   "ConnectionStrings": {
-    // AppDB (PublisherApp). Migrations + seed run automatically on startup.
-    "AppDb": "Server=(localdb)\\MSSQLLocalDB;Database=PublisherApp;Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=True"
+    // AppDB. Migrations + seed run automatically on startup.
+    "AppDb": "Server=localhost;Database=01MultiSiteCMS;Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=True"
   },
   "Encryption": {
     // AES-256-GCM key for site connection strings. DEV ONLY — 32-char raw string (= 32 bytes).
