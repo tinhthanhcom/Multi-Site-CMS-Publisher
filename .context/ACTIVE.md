@@ -2,7 +2,7 @@
 **Branch:** `feature/phases-1-3-foundation`
 **Started:** 2026-06-18
 **Focus:** Đã hoàn thành Phase 1 (Setup & Foundation), Phase 2 (Site & Mapping), Phase 3 (Manual Publishing). Tiếp theo: Phase 4 (AI).
-**Status:** Phase 1-3 done (chờ review/merge)
+**Status:** Phase 1-3 done & merged vào `main` (fcb2b17); DB = `localhost/01MultiSiteCMS`
 
 ## In Progress
 
@@ -16,13 +16,13 @@
 
 ## Recent Context
 
-- 2026-06-18: Scaffold `MultiSiteCmsPublisher.slnx` (net8.0, 3 project + tests). Lưu ý: SDK 10 tạo `.slnx`; template `blazor` (Blazor Web App) thay cho `blazorserver`, render mode InteractiveServer.
-- 2026-06-18: Hoàn thành Phase 1-3 qua điều phối 5 agent theo wave (foundation → web/connector → site-mapping/publisher → verify).
+- 2026-06-18: Trỏ AppDb sang `localhost/01MultiSiteCMS`, áp migration (7 bảng + 2 view + 2 proc), seed OK, app start + /login=200.
+- 2026-06-18: Review (build sạch, 56/56 test) rồi merge nhánh Phase 1-3 vào `main` (--no-ff, commit fcb2b17). Chưa push origin.
 - 2026-06-18: E2E verify: publish vào `TargetSiteDemo.dbo.Articles` trên LocalDB, capture RemotePostId, injection bị chặn.
 
 ## Next Recommended Moves
 
-1. Review + merge `feature/phases-1-3-foundation` vào `main`
+1. (tùy chọn) `git push origin main` + xóa nhánh `feature/phases-1-3-foundation`
 2. Phase 4: tích hợp Claude API (streaming) cho AIContentGenerator + Prompt Template Manager + nút "AI Viết" trong post editor
 3. Phase 5: Hangfire jobs (PublishScheduledPostsJob đọc các post đang `scheduled`, RetryFailedPostsJob)
 4. Cân nhắc `IDbContextFactory<AppDbContext>` nếu gặp lỗi concurrency DbContext trong Blazor Server

@@ -12,3 +12,5 @@
 [2026-06-18] feat(web+infra): Phase 3 (Agent E) - PostPublisher (build INSERT từ mapping, Dapper execute trong transaction, capture RemotePostId, status transitions, audit), Post list/editor (Quill, auto-slug bỏ dấu tiếng Việt), Publish Now / Schedule (UTC) / Retry.
 [2026-06-18] test(e2e): Wave 4 verification - integration test publish thật vào LocalDB `TargetSiteDemo.dbo.Articles` (row inserted, RemotePostId captured, draft→published), injection bị SafeIdentifier chặn. Build sạch, 56 tests pass, app start + /login OK.
 [2026-06-18] fix(web): thêm `@using Publisher.Core.Models` vào `SiteEdit.razor` (race giữa agent song song gây CS0246).
+[2026-06-18] chore(config): trỏ AppDb sang SQL Server `localhost/01MultiSiteCMS` (instance mặc định, Windows auth). AppDbContextFactory đọc env `ConnectionStrings__AppDb` (mặc định DB mới). Áp migration: 7 bảng + 2 view + 2 proc; app start OK, seed (admin + prompt templates) đã ghi, /login=200.
+[2026-06-18] chore(git): review (build sạch, 56/56 test pass) rồi merge `feature/phases-1-3-foundation` vào `main` (--no-ff, commit fcb2b17). Chưa push origin.
