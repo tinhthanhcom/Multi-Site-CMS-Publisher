@@ -1,0 +1,308 @@
+@page "/sites"
+@attribute [Authorize(Roles = "Admin")]
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject IAuditLogService Audit
+@inject ISiteDbConnector Connector
+@inject AuthenticationStateProvider AuthState
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>Sites</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Sites</h1>
+    <a class="btn btn-primary" href="/sites/new">+ Thêm site</a>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body d-flex flex-wrap gap-3 align-items-end">
+        <div>
+            <label class="form-label mb-1">Tìm theo tên</label>
+            <input class="form-control" placeholder="Tên site..." value="@_search"
+                   @oninput="OnSearchChanged" />
+        </div>
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="onlyActive"
+                   checked="@_onlyActive" @onchange="OnOnlyActiveChanged" />
+            <label class="form-check-label" for="onlyActive">Chỉ hiển thị đang kích hoạt</label>
+        </div>
+    </div>
+</div>
+
+@if (_sites is null)
+{
+    <p>Đang tải...</p>
+}
+else
+{
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Tên</th>
+                        <th>BaseUrl</th>
+                        <th>Loại DB</th>
+                        <th>Kích hoạt</th>
+                        <th>Kết nối gần nhất</th>
+                        <th class="text-end">Thao tác</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!Filtered.Any())
+                    {
+                        <tr><td colspan="6" class="text-center text-muted py-4">Không có site nào.</td></tr>
+                    }
+                    @foreach (var s in Filtered)
+                    {
+                        <tr>
+                            <td class="fw-semibold">@s.Name</td>
+                            <td>
+                                @if (!string.IsNullOrWhiteSpace(s.BaseUrl))
+                                {
+                                    <a href="@s.BaseUrl" target="_blank" rel="noopener">@s.BaseUrl</a>
+                                }
+                                else
+                                {
+                                    <span class="text-muted">-</span>
+                                }
+                            </td>
+                            <td>@s.DbType</td>
+                            <td>
+                                @if (s.IsActive)
+                                {
+                                    <span class="badge bg-success">Có</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary">Không</span>
+                                }
+                            </td>
+                            <td>
+                                @if (s.LastConnectionStatus == true)
+                                {
+                                    <span class="badge bg-success">OK</span>
+                                }
+                                else if (s.LastConnectionStatus == false)
+                                {
+                                    <span class="badge bg-danger" title="@s.LastConnectionError">Lỗi</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary">Chưa test</span>
+                                }
+                                @if (s.LastConnectionTest is not null)
+                                {
+                                    <div class="small text-muted">@s.LastConnectionTest.Value.ToString("yyyy-MM-dd HH:mm")</div>
+                                }
+                            </td>
+                            <td class="text-end">
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <a class="btn btn-outline-primary" href="@($"/sites/{s.Id}/edit")">Sửa</a>
+                                    <a class="btn btn-outline-secondary" href="@($"/sites/{s.Id}/mapping")">Mapping</a>
+                                    <button class="btn btn-outline-info" disabled="@(_testingId == s.Id)"
+                                            @onclick="() => TestConnection(s)">
+                                        @(_testingId == s.Id ? "Đang test..." : "Test")
+                                    </button>
+                                    @if (s.IsActive)
+                                    {
+                                        <button class="btn btn-outline-warning" @onclick="() => ToggleActive(s, false)">Tắt</button>
+                                    }
+                                    else
+                                    {
+                                        <button class="btn btn-outline-success" @onclick="() => ToggleActive(s, true)">Bật</button>
+                                    }
+                                    <button class="btn btn-outline-danger" @onclick="() => AskDelete(s)">Xóa</button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@if (_deleteTarget is not null)
+{
+    <div class="modal d-block" tabindex="-1" style="background:rgba(0,0,0,.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Xóa site</h5>
+                    <button type="button" class="btn-close" @onclick="CancelDelete"></button>
+                </div>
+                <div class="modal-body">
+                    @if (_deletePostCount > 0)
+                    {
+                        <div class="alert alert-warning mb-0">
+                            Site <strong>@_deleteTarget.Name</strong> đang có @_deletePostCount bài viết nên
+                            không thể xóa. Hãy <strong>tắt (deactivate)</strong> thay vì xóa.
+                        </div>
+                    }
+                    else
+                    {
+                        <p>
+                            Bạn chắc chắn muốn xóa site <strong>@_deleteTarget.Name</strong>?
+                            Mapping của site cũng sẽ bị xóa theo. Không thể hoàn tác.
+                        </p>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-outline-secondary" @onclick="CancelDelete">Hủy</button>
+                    @if (_deletePostCount == 0)
+                    {
+                        <button class="btn btn-danger" disabled="@_deleting" @onclick="ConfirmDelete">Xóa</button>
+                    }
+                    else
+                    {
+                        <button class="btn btn-warning" @onclick="DeactivateFromDialog">Tắt site</button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Site>? _sites;
+    private string _search = string.Empty;
+    private bool _onlyActive;
+    private int? _testingId;
+
+    private Site? _deleteTarget;
+    private int _deletePostCount;
+    private bool _deleting;
+
+    private IEnumerable<Site> Filtered =>
+        (_sites ?? Enumerable.Empty<Site>())
+            .Where(s => string.IsNullOrWhiteSpace(_search)
+                        || s.Name.Contains(_search, StringComparison.OrdinalIgnoreCase))
+            .Where(s => !_onlyActive || s.IsActive);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _sites = await Db.Sites.AsNoTracking().OrderBy(s => s.Name).ToListAsync();
+    }
+
+    private void OnSearchChanged(ChangeEventArgs e) => _search = e.Value?.ToString() ?? string.Empty;
+
+    private void OnOnlyActiveChanged(ChangeEventArgs e) => _onlyActive = e.Value is bool b && b;
+
+    private async Task TestConnection(Site s)
+    {
+        _testingId = s.Id;
+        try
+        {
+            var result = await Connector.TestConnectionAsync(s.Id);
+            // Connector persists LastConnection* + audits CONNECTION_TEST itself; refresh our row.
+            s.LastConnectionTest = DateTime.UtcNow;
+            s.LastConnectionStatus = result.Success;
+            s.LastConnectionError = result.Success ? null : result.Error;
+
+            if (result.Success)
+                Toast.ShowSuccess($"Kết nối OK ({result.DurationMs} ms, CanInsert={result.CanInsert}).");
+            else
+                Toast.ShowError($"Kết nối thất bại: {result.Error}");
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Lỗi khi test kết nối: {ex.Message}");
+        }
+        finally
+        {
+            _testingId = null;
+        }
+    }
+
+    private async Task ToggleActive(Site s, bool active)
+    {
+        var entity = await Db.Sites.FirstOrDefaultAsync(x => x.Id == s.Id);
+        if (entity is null) return;
+
+        entity.IsActive = active;
+        entity.UpdatedAt = DateTime.UtcNow;
+        await Db.SaveChangesAsync();
+
+        await Audit.WriteAsync("SITE_UPDATED", userId: await CurrentUserIdAsync(),
+            siteId: entity.Id, entityType: nameof(Site), entityId: entity.Id.ToString(),
+            details: active ? "Activated" : "Deactivated");
+
+        s.IsActive = active;
+        Toast.ShowSuccess(active ? "Đã kích hoạt site." : "Đã tắt site.");
+        StateHasChanged();
+    }
+
+    private async Task AskDelete(Site s)
+    {
+        _deleteTarget = s;
+        _deletePostCount = await Db.Posts.CountAsync(p => p.SiteId == s.Id);
+    }
+
+    private void CancelDelete()
+    {
+        _deleteTarget = null;
+        _deletePostCount = 0;
+    }
+
+    private async Task DeactivateFromDialog()
+    {
+        if (_deleteTarget is null) return;
+        var target = _deleteTarget;
+        CancelDelete();
+        await ToggleActive(target, false);
+    }
+
+    private async Task ConfirmDelete()
+    {
+        if (_deleteTarget is null) return;
+        _deleting = true;
+        try
+        {
+            // Re-check posts to avoid a race; hard-block if any exist.
+            var postCount = await Db.Posts.CountAsync(p => p.SiteId == _deleteTarget.Id);
+            if (postCount > 0)
+            {
+                _deletePostCount = postCount;
+                Toast.ShowError("Site đã có bài viết, không thể xóa.");
+                return;
+            }
+
+            var entity = await Db.Sites.FirstOrDefaultAsync(x => x.Id == _deleteTarget.Id);
+            if (entity is null)
+            {
+                Toast.ShowError("Không tìm thấy site.");
+                return;
+            }
+
+            var id = entity.Id;
+            var name = entity.Name;
+            Db.Sites.Remove(entity); // mapping cascades via FK config
+            await Db.SaveChangesAsync();
+
+            await Audit.WriteAsync("SITE_DELETED", userId: await CurrentUserIdAsync(),
+                siteId: id, entityType: nameof(Site), entityId: id.ToString(),
+                details: $"Deleted site '{name}'.");
+
+            _sites?.RemoveAll(x => x.Id == id);
+            Toast.ShowSuccess("Đã xóa site.");
+            CancelDelete();
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Không thể xóa site: {ex.Message}");
+        }
+        finally
+        {
+            _deleting = false;
+        }
+    }
+
+    private async Task<int?> CurrentUserIdAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var raw = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(raw, out var id) ? id : null;
+    }
+}

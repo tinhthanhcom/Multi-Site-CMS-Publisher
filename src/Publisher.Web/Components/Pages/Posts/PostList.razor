@@ -1,0 +1,257 @@
+@page "/posts"
+@attribute [Authorize]
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject IPostPublisher Publisher
+@inject AuthenticationStateProvider AuthState
+@using Microsoft.EntityFrameworkCore
+@using Publisher.Core.Entities
+@using Publisher.Core.Enums
+
+<PageTitle>Bài viết</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Bài viết</h1>
+    <a class="btn btn-primary" href="/posts/new">+ Bài viết mới</a>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label">Site</label>
+                <select class="form-select" @bind="_filterSiteId" @bind:after="ApplyFilters">
+                    <option value="0">Tất cả site</option>
+                    @if (_sites is not null)
+                    {
+                        @foreach (var s in _sites)
+                        {
+                            <option value="@s.Id">@s.Name</option>
+                        }
+                    }
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Trạng thái</label>
+                <select class="form-select" @bind="_filterStatus" @bind:after="ApplyFilters">
+                    <option value="">Tất cả</option>
+                    @foreach (var st in PostStatuses.All)
+                    {
+                        <option value="@st">@st</option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Từ ngày</label>
+                <input type="date" class="form-control" @bind="_filterFrom" @bind:after="ApplyFilters" />
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Đến ngày</label>
+                <input type="date" class="form-control" @bind="_filterTo" @bind:after="ApplyFilters" />
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_rows is null)
+{
+    <p>Đang tải...</p>
+}
+else if (_rows.Count == 0)
+{
+    <div class="alert alert-info">Không có bài viết nào khớp bộ lọc.</div>
+}
+else
+{
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Tiêu đề</th>
+                        <th>Site</th>
+                        <th>Trạng thái</th>
+                        <th>Lên lịch</th>
+                        <th>Đã đăng</th>
+                        <th>Tạo lúc</th>
+                        <th class="text-end">Thao tác</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _rows)
+                    {
+                        <tr>
+                            <td>@r.Title</td>
+                            <td>@r.SiteName</td>
+                            <td>
+                                <span class="badge @StatusBadge(r.Status)">@r.Status</span>
+                                @if (r.Status == PostStatuses.Failed && !string.IsNullOrEmpty(r.PublishError))
+                                {
+                                    <span class="bi bi-info-circle text-danger ms-1" title="@r.PublishError"></span>
+                                }
+                            </td>
+                            <td>@(r.ScheduledAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                            <td>@(r.PublishedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                            <td>@r.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                            <td class="text-end">
+                                @if (r.Status is PostStatuses.Draft or PostStatuses.Scheduled)
+                                {
+                                    <a class="btn btn-sm btn-outline-primary" href="@($"/posts/{r.Id}/edit")">Sửa</a>
+                                    <button class="btn btn-sm btn-success" disabled="@_busy" @onclick="() => PublishNow(r.Id)">Đăng ngay</button>
+                                    <button class="btn btn-sm btn-outline-danger" disabled="@_busy" @onclick="() => Delete(r.Id)">Xóa</button>
+                                }
+                                else if (r.Status == PostStatuses.Failed)
+                                {
+                                    <a class="btn btn-sm btn-outline-primary" href="@($"/posts/{r.Id}/edit")">Sửa</a>
+                                    <button class="btn btn-sm btn-warning" disabled="@_busy" @onclick="() => PublishNow(r.Id)">Thử lại</button>
+                                }
+                                else if (r.Status == PostStatuses.Published)
+                                {
+                                    <span class="text-muted small">Remote ID: @(r.RemotePostId ?? "-")</span>
+                                }
+                                else
+                                {
+                                    <span class="text-muted small">Đang xử lý...</span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Site>? _sites;
+    private List<Row>? _rows;
+
+    private int _filterSiteId;
+    private string _filterStatus = string.Empty;
+    private DateTime? _filterFrom;
+    private DateTime? _filterTo;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _sites = await Db.Sites.AsNoTracking().OrderBy(s => s.Name).ToListAsync();
+        await ApplyFilters();
+    }
+
+    private async Task ApplyFilters()
+    {
+        var q = Db.Posts.AsNoTracking().Include(p => p.Site).AsQueryable();
+
+        if (_filterSiteId > 0)
+            q = q.Where(p => p.SiteId == _filterSiteId);
+
+        if (!string.IsNullOrEmpty(_filterStatus))
+            q = q.Where(p => p.Status == _filterStatus);
+
+        if (_filterFrom is not null)
+        {
+            var fromUtc = DateTime.SpecifyKind(_filterFrom.Value.Date, DateTimeKind.Local).ToUniversalTime();
+            q = q.Where(p => p.CreatedAt >= fromUtc);
+        }
+        if (_filterTo is not null)
+        {
+            var toUtc = DateTime.SpecifyKind(_filterTo.Value.Date.AddDays(1), DateTimeKind.Local).ToUniversalTime();
+            q = q.Where(p => p.CreatedAt < toUtc);
+        }
+
+        _rows = await q
+            .OrderByDescending(p => p.CreatedAt)
+            .Select(p => new Row
+            {
+                Id = p.Id,
+                Title = p.Title,
+                SiteName = p.Site != null ? p.Site.Name : "-",
+                Status = p.Status,
+                ScheduledAt = p.ScheduledAt,
+                PublishedAt = p.PublishedAt,
+                CreatedAt = p.CreatedAt,
+                RemotePostId = p.RemotePostId,
+                PublishError = p.PublishError,
+            })
+            .ToListAsync();
+    }
+
+    private async Task PublishNow(int postId)
+    {
+        _busy = true;
+        try
+        {
+            var userId = await CurrentUserIdAsync() ?? 0;
+            var result = await Publisher.PublishAsync(postId, userId);
+            if (result.Success)
+                Toast.ShowSuccess($"Đã đăng bài. Remote ID: {result.RemotePostId}");
+            else
+                Toast.ShowError($"Đăng thất bại: {result.Error}");
+
+            await ApplyFilters();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task Delete(int postId)
+    {
+        _busy = true;
+        try
+        {
+            var post = await Db.Posts.FirstOrDefaultAsync(p => p.Id == postId);
+            if (post is null)
+            {
+                Toast.ShowError("Không tìm thấy bài viết.");
+                return;
+            }
+            if (post.Status is not (PostStatuses.Draft or PostStatuses.Scheduled))
+            {
+                Toast.ShowError("Chỉ có thể xóa bài ở trạng thái nháp hoặc đã lên lịch.");
+                return;
+            }
+
+            Db.Posts.Remove(post);
+            await Db.SaveChangesAsync();
+            Toast.ShowSuccess("Đã xóa bài viết.");
+            await ApplyFilters();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string StatusBadge(string status) => status switch
+    {
+        PostStatuses.Draft => "bg-secondary",
+        PostStatuses.Scheduled => "bg-info text-dark",
+        PostStatuses.Publishing => "bg-primary",
+        PostStatuses.Published => "bg-success",
+        PostStatuses.Failed => "bg-danger",
+        _ => "bg-secondary"
+    };
+
+    private async Task<int?> CurrentUserIdAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var raw = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(raw, out var id) ? id : null;
+    }
+
+    private sealed class Row
+    {
+        public int Id { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string SiteName { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public DateTime? ScheduledAt { get; set; }
+        public DateTime? PublishedAt { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public string? RemotePostId { get; set; }
+        public string? PublishError { get; set; }
+    }
+}

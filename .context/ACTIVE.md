@@ -1,29 +1,31 @@
-**Name:** Sprint 0 - Foundation Setup
-**Branch:** n/a (workspace chưa là git repo)
+**Name:** Sprint 1 - Phases 1-3 Implementation
+**Branch:** `feature/phases-1-3-foundation`
 **Started:** 2026-06-18
-**Focus:** Thiết lập shared context cho Claude CLI và Codex CLI, sau đó chuẩn bị scaffold kỹ thuật cho dự án
-**Status:** in-progress
+**Focus:** Đã hoàn thành Phase 1 (Setup & Foundation), Phase 2 (Site & Mapping), Phase 3 (Manual Publishing). Tiếp theo: Phase 4 (AI).
+**Status:** Phase 1-3 done (chờ review/merge)
 
 ## In Progress
 
 | Task | Owner | Status | Notes |
 |---|---|---|---|
-| Thiết lập shared AI context | codex | done | Dùng `.context` làm nguồn sự thật chung |
-| Tóm tắt kiến trúc từ docs hiện có | codex | done | Đã trích từ tài liệu thiết kế và deployment plan |
-| Chuẩn bị roadmap triển khai Phase 1 | team | next | Chờ quyết định scaffold solution thực tế |
+| Phase 1: Setup & Foundation | claude (Agent A+B) | done | Solution scaffold, AppDB+EF, cookie auth, layout, Users CRUD |
+| Phase 2: Site & Field Mapping | claude (Agent C+D) | done | SiteDbConnector, encrypt conn, mapping UI, INSERT preview/validate |
+| Phase 3: Manual Publishing | claude (Agent E) | done | PostPublisher, post editor (Quill), publish/schedule/retry |
+| Wave 4: E2E verification | claude | done | Publish thật vào LocalDB OK, 56 tests pass, app start OK |
+| Phase 4: AI Content Generator | — | next | Claude API streaming, prompt templates, token tracking |
 
 ## Recent Context
 
-- 2026-06-18: Đọc và chuẩn hóa context từ `docs/system-design.md`, `docs/deployment-plan.md`, `docs/database-design.sql`
-- 2026-06-18: Áp dụng mô hình shared context từ repo `orynvn/Multi-AI-Workspace-Setup-`
-- 2026-06-18: Tạo adapter chung cho Claude CLI và Codex CLI
+- 2026-06-18: Scaffold `MultiSiteCmsPublisher.slnx` (net8.0, 3 project + tests). Lưu ý: SDK 10 tạo `.slnx`; template `blazor` (Blazor Web App) thay cho `blazorserver`, render mode InteractiveServer.
+- 2026-06-18: Hoàn thành Phase 1-3 qua điều phối 5 agent theo wave (foundation → web/connector → site-mapping/publisher → verify).
+- 2026-06-18: E2E verify: publish vào `TargetSiteDemo.dbo.Articles` trên LocalDB, capture RemotePostId, injection bị chặn.
 
 ## Next Recommended Moves
 
-1. Khởi tạo Git repo hoặc mở đúng repo chứa source code thực tế để bắt đầu lịch sử phát triển chuẩn
-2. Scaffold solution .NET 8 với các project nền (`Web`, `API`, `Core`, `Infrastructure`)
-3. Chuyển `docs/database-design.sql` thành migration / bootstrap strategy rõ ràng
-4. Quyết định auth stack và editor integration trước khi code UI
+1. Review + merge `feature/phases-1-3-foundation` vào `main`
+2. Phase 4: tích hợp Claude API (streaming) cho AIContentGenerator + Prompt Template Manager + nút "AI Viết" trong post editor
+3. Phase 5: Hangfire jobs (PublishScheduledPostsJob đọc các post đang `scheduled`, RetryFailedPostsJob)
+4. Cân nhắc `IDbContextFactory<AppDbContext>` nếu gặp lỗi concurrency DbContext trong Blazor Server
 
 ## Session Start Checklist
 

@@ -1,0 +1,347 @@
+@page "/sites/new"
+@page "/sites/{Id:int}/edit"
+@attribute [Authorize(Roles = "Admin")]
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject IAuditLogService Audit
+@inject ISiteDbConnector Connector
+@inject IConnectionStringEncryptor Encryptor
+@inject AuthenticationStateProvider AuthState
+@using Microsoft.EntityFrameworkCore
+@using System.ComponentModel.DataAnnotations
+@using Publisher.Core.Models
+
+<PageTitle>@(IsNew ? "Thêm site" : "Sửa site")</PageTitle>
+
+<h1 class="h3 mb-3">@(IsNew ? "Thêm site" : "Sửa site")</h1>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_model is null)
+{
+    <p>Đang tải...</p>
+}
+else
+{
+    <EditForm Model="_model" OnValidSubmit="Save" class="card" style="max-width: 48rem;">
+        <DataAnnotationsValidator />
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label">Tên site <span class="text-danger">*</span></label>
+                <InputText class="form-control" @bind-Value="_model.Name" />
+                <ValidationMessage For="() => _model.Name" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">BaseUrl</label>
+                <InputText class="form-control" @bind-Value="_model.BaseUrl" placeholder="https://example.com" />
+                <ValidationMessage For="() => _model.BaseUrl" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Mô tả</label>
+                <InputTextArea class="form-control" rows="2" @bind-Value="_model.Description" />
+            </div>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Loại DB</label>
+                    <InputSelect class="form-select" @bind-Value="_model.DbType">
+                        <option value="SqlServer">SqlServer</option>
+                        <option value="MySQL">MySQL (chưa hỗ trợ)</option>
+                    </InputSelect>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Ngôn ngữ mặc định</label>
+                    <InputText class="form-control" @bind-Value="_model.DefaultLanguage" />
+                </div>
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Tone mặc định</label>
+                <InputText class="form-control" @bind-Value="_model.DefaultTone" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">System Prompt (AI)</label>
+                <InputTextArea class="form-control" rows="3" @bind-Value="_model.SystemPrompt" />
+            </div>
+
+            <hr />
+
+            <div class="mb-2">
+                <label class="form-label">
+                    Connection String
+                    @if (IsNew)
+                    {
+                        <span class="text-danger">*</span>
+                    }
+                </label>
+                @if (!IsNew && _hasExistingConnString)
+                {
+                    <div class="form-text mb-1">
+                        Đã có connection string được mã hóa. Để trống để giữ nguyên, hoặc nhập mới để thay thế.
+                    </div>
+                }
+                <input type="password" class="form-control" autocomplete="new-password"
+                       placeholder="@(IsNew ? "Server=...;Database=...;User Id=...;Password=...;" : "(để trống để giữ nguyên)")"
+                       value="@_model.ConnectionString"
+                       @oninput="OnConnStringChanged" />
+            </div>
+            <div class="mb-3">
+                <button type="button" class="btn btn-outline-info btn-sm" disabled="@_testing" @onclick="TestConnection">
+                    @(_testing ? "Đang test..." : "Test kết nối")
+                </button>
+                @if (_lastTest is not null)
+                {
+                    @if (_lastTest.Success)
+                    {
+                        <span class="badge bg-success ms-2">OK (@_lastTest.DurationMs ms, CanInsert=@_lastTest.CanInsert)</span>
+                    }
+                    else
+                    {
+                        <span class="badge bg-danger ms-2" title="@_lastTest.Error">Lỗi</span>
+                        <div class="small text-danger mt-1">@_lastTest.Error</div>
+                    }
+                }
+            </div>
+
+            <div class="form-check mb-2">
+                <InputCheckbox class="form-check-input" id="isActive" @bind-Value="_model.IsActive" />
+                <label class="form-check-label" for="isActive">Kích hoạt</label>
+            </div>
+        </div>
+        <div class="card-footer d-flex gap-2">
+            <button type="submit" class="btn btn-primary" disabled="@_saving">Lưu</button>
+            <a class="btn btn-outline-secondary" href="/sites">Hủy</a>
+        </div>
+    </EditForm>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+
+    private SiteFormModel? _model;
+    private string? _loadError;
+    private bool _saving;
+    private bool _testing;
+    private bool _hasExistingConnString;
+    private ConnectionTestResult? _lastTest;
+
+    private bool IsNew => Id is null;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (IsNew)
+        {
+            _model = new SiteFormModel { DbType = "SqlServer", DefaultLanguage = "vi", IsActive = true };
+            return;
+        }
+
+        var site = await Db.Sites.AsNoTracking().FirstOrDefaultAsync(s => s.Id == Id);
+        if (site is null)
+        {
+            _loadError = "Không tìm thấy site.";
+            return;
+        }
+
+        _hasExistingConnString = !string.IsNullOrWhiteSpace(site.ConnectionStringEnc);
+        _model = new SiteFormModel
+        {
+            Name = site.Name,
+            BaseUrl = site.BaseUrl,
+            Description = site.Description,
+            DbType = site.DbType,
+            DefaultLanguage = site.DefaultLanguage,
+            DefaultTone = site.DefaultTone,
+            SystemPrompt = site.SystemPrompt,
+            IsActive = site.IsActive,
+            ConnectionString = string.Empty // never surface decrypted value
+        };
+    }
+
+    private void OnConnStringChanged(ChangeEventArgs e)
+    {
+        if (_model is null) return;
+        _model.ConnectionString = e.Value?.ToString() ?? string.Empty;
+        _lastTest = null; // invalidate previous test result when value changes
+    }
+
+    private async Task TestConnection()
+    {
+        if (_model is null) return;
+        _testing = true;
+        _lastTest = null;
+        try
+        {
+            // Prefer the freshly entered raw string; otherwise (edit) test the persisted one by siteId.
+            if (!string.IsNullOrWhiteSpace(_model.ConnectionString))
+            {
+                _lastTest = await Connector.TestConnectionAsync(_model.ConnectionString);
+            }
+            else if (!IsNew && _hasExistingConnString)
+            {
+                _lastTest = await Connector.TestConnectionAsync(Id!.Value);
+            }
+            else
+            {
+                Toast.ShowWarning("Hãy nhập connection string để test.");
+                return;
+            }
+
+            if (_lastTest.Success)
+                Toast.ShowSuccess($"Kết nối OK ({_lastTest.DurationMs} ms).");
+            else
+                Toast.ShowError($"Kết nối thất bại: {_lastTest.Error}");
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Lỗi khi test kết nối: {ex.Message}");
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private async Task Save()
+    {
+        if (_model is null) return;
+        _saving = true;
+        try
+        {
+            var name = _model.Name.Trim();
+            var nameTaken = await Db.Sites.AnyAsync(s => s.Name == name && (IsNew || s.Id != Id));
+            if (nameTaken)
+            {
+                Toast.ShowError("Tên site đã tồn tại.");
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+
+            if (IsNew)
+            {
+                if (string.IsNullOrWhiteSpace(_model.ConnectionString))
+                {
+                    Toast.ShowError("Connection string bắt buộc khi tạo site mới.");
+                    return;
+                }
+
+                // Test-before-save: only persist if the connection passes. Re-test unless we
+                // already have a passing result for the current (unchanged) value.
+                if (_lastTest is null || !_lastTest.Success)
+                {
+                    var test = await Connector.TestConnectionAsync(_model.ConnectionString);
+                    _lastTest = test;
+                    if (!test.Success)
+                    {
+                        Toast.ShowError($"Không lưu được: kết nối thất bại ({test.Error}). Hãy sửa connection string.");
+                        return;
+                    }
+                }
+
+                var site = new Site
+                {
+                    Name = name,
+                    BaseUrl = NullIfBlank(_model.BaseUrl),
+                    Description = NullIfBlank(_model.Description),
+                    DbType = _model.DbType,
+                    DefaultLanguage = string.IsNullOrWhiteSpace(_model.DefaultLanguage) ? "vi" : _model.DefaultLanguage.Trim(),
+                    DefaultTone = NullIfBlank(_model.DefaultTone),
+                    SystemPrompt = NullIfBlank(_model.SystemPrompt),
+                    IsActive = _model.IsActive,
+                    ConnectionStringEnc = Encryptor.Encrypt(_model.ConnectionString), // encrypt before persist
+                    CreatedBy = await CurrentUserIdAsync() ?? 0,
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                Db.Sites.Add(site);
+                await Db.SaveChangesAsync();
+
+                // NEVER audit the connection string itself.
+                await Audit.WriteAsync("SITE_CREATED", userId: await CurrentUserIdAsync(),
+                    siteId: site.Id, entityType: nameof(Site), entityId: site.Id.ToString(),
+                    details: $"Created site '{site.Name}' (DbType={site.DbType}).");
+                Toast.ShowSuccess("Đã tạo site.");
+            }
+            else
+            {
+                var site = await Db.Sites.FirstOrDefaultAsync(s => s.Id == Id);
+                if (site is null)
+                {
+                    Toast.ShowError("Không tìm thấy site.");
+                    return;
+                }
+
+                site.Name = name;
+                site.BaseUrl = NullIfBlank(_model.BaseUrl);
+                site.Description = NullIfBlank(_model.Description);
+                site.DbType = _model.DbType;
+                site.DefaultLanguage = string.IsNullOrWhiteSpace(_model.DefaultLanguage) ? "vi" : _model.DefaultLanguage.Trim();
+                site.DefaultTone = NullIfBlank(_model.DefaultTone);
+                site.SystemPrompt = NullIfBlank(_model.SystemPrompt);
+                site.IsActive = _model.IsActive;
+                site.UpdatedAt = now;
+
+                // Only replace (re-encrypt) when a new value was entered; blank keeps existing enc.
+                if (!string.IsNullOrWhiteSpace(_model.ConnectionString))
+                {
+                    site.ConnectionStringEnc = Encryptor.Encrypt(_model.ConnectionString);
+                }
+
+                await Db.SaveChangesAsync();
+
+                await Audit.WriteAsync("SITE_UPDATED", userId: await CurrentUserIdAsync(),
+                    siteId: site.Id, entityType: nameof(Site), entityId: site.Id.ToString(),
+                    details: string.IsNullOrWhiteSpace(_model.ConnectionString)
+                        ? "Updated site metadata."
+                        : "Updated site metadata + replaced connection string.");
+                Toast.ShowSuccess("Đã cập nhật site.");
+            }
+
+            Nav.NavigateTo("/sites");
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Lỗi khi lưu: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    private async Task<int?> CurrentUserIdAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var raw = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(raw, out var id) ? id : null;
+    }
+
+    public sealed class SiteFormModel
+    {
+        [Required(ErrorMessage = "Tên site là bắt buộc."), StringLength(200)]
+        public string Name { get; set; } = string.Empty;
+
+        [Url(ErrorMessage = "BaseUrl không hợp lệ."), StringLength(500)]
+        public string? BaseUrl { get; set; }
+
+        public string? Description { get; set; }
+
+        [Required]
+        public string DbType { get; set; } = "SqlServer";
+
+        [StringLength(10)]
+        public string DefaultLanguage { get; set; } = "vi";
+
+        public string? DefaultTone { get; set; }
+        public string? SystemPrompt { get; set; }
+        public bool IsActive { get; set; } = true;
+
+        /// <summary>Raw, plaintext connection string typed by the admin — never persisted as-is.</summary>
+        public string ConnectionString { get; set; } = string.Empty;
+    }
+}

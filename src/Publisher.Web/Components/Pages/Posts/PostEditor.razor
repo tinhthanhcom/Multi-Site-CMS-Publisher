@@ -1,0 +1,473 @@
+@page "/posts/new"
+@page "/posts/{Id:int}/edit"
+@attribute [Authorize]
+@implements IAsyncDisposable
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject IPostPublisher Publisher
+@inject IJSRuntime JS
+@inject AuthenticationStateProvider AuthState
+@using Microsoft.EntityFrameworkCore
+@using System.ComponentModel.DataAnnotations
+@using Publisher.Core.Entities
+@using Publisher.Core.Enums
+@using Publisher.Web.Services
+
+<PageTitle>@(IsNew ? "Bài viết mới" : "Sửa bài viết")</PageTitle>
+
+<h1 class="h3 mb-3">@(IsNew ? "Bài viết mới" : "Sửa bài viết")</h1>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger">@_loadError</div>
+    <a class="btn btn-outline-secondary" href="/posts">Quay lại danh sách</a>
+}
+else if (_model is null)
+{
+    <p>Đang tải...</p>
+}
+else
+{
+    @if (!_canEdit)
+    {
+        <div class="alert alert-warning">
+            Bài viết ở trạng thái <strong>@_currentStatus</strong> chỉ có thể xem, không thể chỉnh sửa.
+            @if (_currentStatus == PostStatuses.Published && !string.IsNullOrEmpty(_model.RemotePostId))
+            {
+                <span>Remote ID: <strong>@_model.RemotePostId</strong></span>
+            }
+        </div>
+    }
+
+    @if (_noMappedSites)
+    {
+        <div class="alert alert-warning">
+            Chưa có site nào đang hoạt động và đã cấu hình field mapping. Vui lòng cấu hình mapping trước khi tạo bài.
+        </div>
+    }
+
+    <EditForm Model="_model" OnValidSubmit="SaveDraft">
+        <DataAnnotationsValidator />
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label">Site <span class="text-danger">*</span></label>
+                            <InputSelect class="form-select" @bind-Value="_model.SiteId" disabled="@(!_canEdit || !IsNew)">
+                                <option value="0">-- Chọn site --</option>
+                                @foreach (var s in _mappedSites)
+                                {
+                                    <option value="@s.Id">@s.Name</option>
+                                }
+                            </InputSelect>
+                            <ValidationMessage For="() => _model.SiteId" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Tiêu đề <span class="text-danger">*</span></label>
+                            <InputText class="form-control" @bind-Value="_model.Title" @bind-Value:after="OnTitleChanged" disabled="@(!_canEdit)" />
+                            <ValidationMessage For="() => _model.Title" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Slug</label>
+                            <div class="input-group">
+                                <InputText class="form-control" @bind-Value="_model.Slug" disabled="@(!_canEdit)" />
+                                <button type="button" class="btn btn-outline-secondary" @onclick="RegenerateSlug" disabled="@(!_canEdit)">
+                                    Tạo lại
+                                </button>
+                            </div>
+                            <div class="form-text">Tự sinh từ tiêu đề; có thể chỉnh tay.</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Nội dung</label>
+                            <div @ref="_editorRef" id="@_editorId" style="min-height: 280px;"></div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Tóm tắt</label>
+                            <InputTextArea class="form-control" rows="2" @bind-Value="_model.Excerpt" disabled="@(!_canEdit)" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-4">
+                <div class="card mb-3">
+                    <div class="card-header">Thông tin thêm</div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label">Ảnh đại diện (URL)</label>
+                            <InputText class="form-control" @bind-Value="_model.Thumbnail" disabled="@(!_canEdit)" />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Category ID</label>
+                            <InputText class="form-control" @bind-Value="_model.CategoryId" disabled="@(!_canEdit)" />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Author ID</label>
+                            <InputText class="form-control" @bind-Value="_model.AuthorId" disabled="@(!_canEdit)" />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">SEO Title</label>
+                            <InputText class="form-control" @bind-Value="_model.SeoTitle" disabled="@(!_canEdit)" />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">SEO Description</label>
+                            <InputTextArea class="form-control" rows="2" @bind-Value="_model.SeoDescription" disabled="@(!_canEdit)" />
+                        </div>
+                    </div>
+                </div>
+
+                @if (_canEdit)
+                {
+                    <div class="card mb-3">
+                        <div class="card-header">Lên lịch</div>
+                        <div class="card-body">
+                            <label class="form-label">Thời điểm đăng</label>
+                            <input type="datetime-local" class="form-control mb-2" @bind="_scheduleLocal" />
+                            <button type="button" class="btn btn-outline-info w-100" disabled="@_busy" @onclick="Schedule">
+                                Lưu lịch đăng
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+
+        @if (_canEdit)
+        {
+            <div class="d-flex gap-2 mb-4">
+                <button type="submit" class="btn btn-primary" disabled="@_busy">Lưu nháp</button>
+                <button type="button" class="btn btn-success" disabled="@_busy" @onclick="PublishNow">Đăng ngay</button>
+                <a class="btn btn-outline-secondary" href="/posts">Hủy</a>
+            </div>
+        }
+        else
+        {
+            <div class="mb-4">
+                <a class="btn btn-outline-secondary" href="/posts">Quay lại</a>
+            </div>
+        }
+    </EditForm>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+
+    private PostFormModel? _model;
+    private string? _loadError;
+    private bool _busy;
+    private bool _canEdit = true;
+    private string _currentStatus = PostStatuses.Draft;
+    private bool _noMappedSites;
+
+    private List<SiteOption> _mappedSites = new();
+    private ElementReference _editorRef;
+    private readonly string _editorId = "quill-" + Guid.NewGuid().ToString("N");
+    private IJSObjectReference? _module;
+    private bool _editorReady;
+
+    private DateTime? _scheduleLocal;
+
+    private bool IsNew => Id is null;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Active sites that HAVE a field mapping configured.
+        _mappedSites = await Db.Sites
+            .AsNoTracking()
+            .Where(s => s.IsActive && s.FieldMapping != null)
+            .OrderBy(s => s.Name)
+            .Select(s => new SiteOption { Id = s.Id, Name = s.Name })
+            .ToListAsync();
+        _noMappedSites = _mappedSites.Count == 0;
+
+        if (IsNew)
+        {
+            _model ??= new PostFormModel();
+            _canEdit = true;
+            _currentStatus = PostStatuses.Draft;
+            return;
+        }
+
+        var post = await Db.Posts.AsNoTracking().FirstOrDefaultAsync(p => p.Id == Id);
+        if (post is null)
+        {
+            _loadError = "Không tìm thấy bài viết.";
+            return;
+        }
+
+        _currentStatus = post.Status;
+        // Editing/deleting only in draft/scheduled; failed can be retried (re-publish) from editor too.
+        _canEdit = post.Status is PostStatuses.Draft or PostStatuses.Scheduled or PostStatuses.Failed;
+
+        _model = new PostFormModel
+        {
+            SiteId = post.SiteId,
+            Title = post.Title,
+            Slug = post.Slug,
+            Content = post.Content,
+            Excerpt = post.Excerpt,
+            Thumbnail = post.Thumbnail,
+            CategoryId = post.CategoryId,
+            AuthorId = post.AuthorId,
+            SeoTitle = post.SeoTitle,
+            SeoDescription = post.SeoDescription,
+            RemotePostId = post.RemotePostId,
+        };
+        _scheduleLocal = post.ScheduledAt?.ToLocalTime();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_model is null || _loadError is not null)
+            return;
+
+        if (!_editorReady)
+        {
+            _editorReady = true;
+            try
+            {
+                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/quill-interop.js");
+                await _module.InvokeAsync<bool>("init", _editorId, _model.Content ?? string.Empty);
+            }
+            catch
+            {
+                // Quill failed to load (e.g. offline CDN); editing falls back to other fields.
+                _module = null;
+            }
+        }
+    }
+
+    private void OnTitleChanged()
+    {
+        // Auto-fill slug from title only while slug is empty (don't clobber manual edits).
+        if (_model is not null && string.IsNullOrWhiteSpace(_model.Slug))
+            _model.Slug = SlugGenerator.Generate(_model.Title);
+    }
+
+    private void RegenerateSlug()
+    {
+        if (_model is not null)
+            _model.Slug = SlugGenerator.Generate(_model.Title);
+    }
+
+    private async Task PullEditorContentAsync()
+    {
+        if (_module is null || _model is null) return;
+        try
+        {
+            var html = await _module.InvokeAsync<string?>("getHtml", _editorId);
+            if (html is not null)
+                _model.Content = html;
+        }
+        catch
+        {
+            // ignore; keep last-known content
+        }
+    }
+
+    private async Task<Post?> UpsertAsync(string status)
+    {
+        if (_model is null) return null;
+
+        await PullEditorContentAsync();
+        var userId = await CurrentUserIdAsync() ?? 0;
+        var now = DateTime.UtcNow;
+
+        if (IsNew)
+        {
+            var post = new Post
+            {
+                SiteId = _model.SiteId,
+                Title = _model.Title.Trim(),
+                Slug = NormalizeSlug(_model.Slug),
+                Content = _model.Content ?? string.Empty,
+                Excerpt = NullIfBlank(_model.Excerpt),
+                Thumbnail = NullIfBlank(_model.Thumbnail),
+                CategoryId = NullIfBlank(_model.CategoryId),
+                AuthorId = NullIfBlank(_model.AuthorId),
+                SeoTitle = NullIfBlank(_model.SeoTitle),
+                SeoDescription = NullIfBlank(_model.SeoDescription),
+                Status = status,
+                CreatedBy = userId,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            Db.Posts.Add(post);
+            await Db.SaveChangesAsync();
+            Id = post.Id; // so subsequent operations target the saved row
+            return post;
+        }
+        else
+        {
+            var post = await Db.Posts.FirstOrDefaultAsync(p => p.Id == Id);
+            if (post is null)
+            {
+                Toast.ShowError("Không tìm thấy bài viết.");
+                return null;
+            }
+            // SiteId is fixed after creation (dropdown disabled); keep existing value.
+            post.Title = _model.Title.Trim();
+            post.Slug = NormalizeSlug(_model.Slug);
+            post.Content = _model.Content ?? string.Empty;
+            post.Excerpt = NullIfBlank(_model.Excerpt);
+            post.Thumbnail = NullIfBlank(_model.Thumbnail);
+            post.CategoryId = NullIfBlank(_model.CategoryId);
+            post.AuthorId = NullIfBlank(_model.AuthorId);
+            post.SeoTitle = NullIfBlank(_model.SeoTitle);
+            post.SeoDescription = NullIfBlank(_model.SeoDescription);
+            post.Status = status;
+            post.UpdatedAt = now;
+            await Db.SaveChangesAsync();
+            return post;
+        }
+    }
+
+    private async Task SaveDraft()
+    {
+        if (!ValidateBeforeSave()) return;
+        _busy = true;
+        try
+        {
+            var post = await UpsertAsync(PostStatuses.Draft);
+            if (post is null) return;
+            _currentStatus = post.Status;
+            Toast.ShowSuccess("Đã lưu nháp.");
+            Nav.NavigateTo("/posts");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task Schedule()
+    {
+        if (!ValidateBeforeSave()) return;
+        if (_scheduleLocal is null)
+        {
+            Toast.ShowError("Vui lòng chọn thời điểm đăng.");
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var post = await UpsertAsync(PostStatuses.Scheduled);
+            if (post is null) return;
+
+            // Convert local picker value -> UTC for storage.
+            var scheduledUtc = DateTime.SpecifyKind(_scheduleLocal.Value, DateTimeKind.Local).ToUniversalTime();
+            var tracked = await Db.Posts.FirstOrDefaultAsync(p => p.Id == post.Id);
+            if (tracked is not null)
+            {
+                tracked.ScheduledAt = scheduledUtc;
+                tracked.UpdatedAt = DateTime.UtcNow;
+                await Db.SaveChangesAsync();
+            }
+
+            _currentStatus = PostStatuses.Scheduled;
+            Toast.ShowSuccess("Đã lưu lịch đăng. (Scheduler sẽ xử lý ở Phase 5.)");
+            Nav.NavigateTo("/posts");
+        }
+        finally { _busy = false; }
+    }
+
+    private async Task PublishNow()
+    {
+        if (!ValidateBeforeSave()) return;
+        _busy = true;
+        try
+        {
+            // Save first (as draft) so the publisher reads persisted data, then publish.
+            var post = await UpsertAsync(PostStatuses.Draft);
+            if (post is null) return;
+
+            var userId = await CurrentUserIdAsync() ?? 0;
+            var result = await Publisher.PublishAsync(post.Id, userId);
+            if (result.Success)
+            {
+                _currentStatus = PostStatuses.Published;
+                Toast.ShowSuccess($"Đã đăng bài. Remote ID: {result.RemotePostId}");
+                Nav.NavigateTo("/posts");
+            }
+            else
+            {
+                _currentStatus = PostStatuses.Failed;
+                Toast.ShowError($"Đăng thất bại: {result.Error}");
+            }
+        }
+        finally { _busy = false; }
+    }
+
+    private bool ValidateBeforeSave()
+    {
+        if (_model is null) return false;
+        if (_model.SiteId <= 0)
+        {
+            Toast.ShowError("Vui lòng chọn site.");
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(_model.Title))
+        {
+            Toast.ShowError("Tiêu đề là bắt buộc.");
+            return false;
+        }
+        return true;
+    }
+
+    private static string? NormalizeSlug(string? slug)
+        => string.IsNullOrWhiteSpace(slug) ? null : SlugGenerator.Generate(slug);
+
+    private static string? NullIfBlank(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private async Task<int?> CurrentUserIdAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var raw = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(raw, out var id) ? id : null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.InvokeVoidAsync("dispose", _editorId);
+                await _module.DisposeAsync();
+            }
+            catch
+            {
+                // circuit may already be torn down
+            }
+        }
+    }
+
+    private sealed class SiteOption
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
+    public sealed class PostFormModel
+    {
+        public int SiteId { get; set; }
+
+        [Required(ErrorMessage = "Tiêu đề là bắt buộc."), StringLength(500)]
+        public string Title { get; set; } = string.Empty;
+
+        public string? Slug { get; set; }
+        public string? Content { get; set; }
+        public string? Excerpt { get; set; }
+        public string? Thumbnail { get; set; }
+        public string? CategoryId { get; set; }
+        public string? AuthorId { get; set; }
+        public string? SeoTitle { get; set; }
+        public string? SeoDescription { get; set; }
+        public string? RemotePostId { get; set; }
+    }
+}

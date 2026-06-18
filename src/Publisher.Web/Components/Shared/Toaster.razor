@@ -1,0 +1,54 @@
+@implements IDisposable
+@inject ToastService ToastService
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3" style="z-index: 1090;">
+    @foreach (var toast in _toasts)
+    {
+        <div class="toast show align-items-center text-bg-@CssClass(toast.Level) border-0 mb-2" role="alert">
+            <div class="d-flex">
+                <div class="toast-body">@toast.Message</div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto"
+                        @onclick="() => Remove(toast.Id)" aria-label="Close"></button>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly List<ToastMessage> _toasts = new();
+
+    protected override void OnInitialized()
+    {
+        ToastService.OnShow += HandleShow;
+    }
+
+    private async void HandleShow(ToastMessage toast)
+    {
+        await InvokeAsync(() =>
+        {
+            _toasts.Add(toast);
+            StateHasChanged();
+        });
+
+        // Auto-dismiss after 5 seconds.
+        await Task.Delay(5000);
+        await InvokeAsync(() => Remove(toast.Id));
+    }
+
+    private void Remove(Guid id)
+    {
+        var removed = _toasts.RemoveAll(t => t.Id == id);
+        if (removed > 0)
+            StateHasChanged();
+    }
+
+    private static string CssClass(ToastLevel level) => level switch
+    {
+        ToastLevel.Success => "success",
+        ToastLevel.Warning => "warning",
+        ToastLevel.Error => "danger",
+        _ => "primary"
+    };
+
+    public void Dispose() => ToastService.OnShow -= HandleShow;
+}
