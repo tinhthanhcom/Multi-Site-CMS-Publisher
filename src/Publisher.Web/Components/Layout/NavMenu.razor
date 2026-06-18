@@ -1,0 +1,37 @@
+<div class="nav-brand px-3 py-3">
+    <a class="navbar-brand text-white fw-semibold" href="/">Publisher</a>
+</div>
+
+<nav class="nav flex-column px-2">
+    <div class="nav-item">
+        <NavLink class="nav-link" href="/" Match="NavLinkMatch.All">
+            <span class="bi bi-speedometer2" aria-hidden="true"></span> Dashboard
+        </NavLink>
+    </div>
+
+    <div class="nav-item">
+        <NavLink class="nav-link" href="sites">
+            <span class="bi bi-globe2" aria-hidden="true"></span> Sites
+        </NavLink>
+    </div>
+
+    <div class="nav-item">
+        <NavLink class="nav-link" href="posts">
+            <span class="bi bi-file-earmark-text" aria-hidden="true"></span> Bài viết
+        </NavLink>
+    </div>
+
+    <AuthorizeView Roles="Admin">
+        <div class="nav-item">
+            <NavLink class="nav-link" href="users">
+                <span class="bi bi-people" aria-hidden="true"></span> Người dùng
+            </NavLink>
+        </div>
+    </AuthorizeView>
+
+    <div class="nav-item">
+        <NavLink class="nav-link" href="account/change-password">
+            <span class="bi bi-key" aria-hidden="true"></span> Đổi mật khẩu
+        </NavLink>
+    </div>
+</nav>

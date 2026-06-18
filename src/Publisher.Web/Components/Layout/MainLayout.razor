@@ -1,0 +1,42 @@
+@inherits LayoutComponentBase
+
+<div class="admin-shell">
+    <aside class="admin-sidebar">
+        <NavMenu />
+    </aside>
+
+    <div class="admin-main">
+        <header class="admin-header">
+            <div class="admin-breadcrumb text-muted small">Multi-Site CMS Publisher</div>
+            <div class="admin-user">
+                <AuthorizeView>
+                    <Authorized>
+                        <span class="me-3">
+                            <i class="bi bi-person-circle"></i>
+                            @(context.User.FindFirst("FullName")?.Value ?? context.User.Identity?.Name)
+                        </span>
+                        <form method="post" action="/auth/logout" class="d-inline">
+                            <AntiforgeryToken />
+                            <button type="submit" class="btn btn-sm btn-outline-secondary">Đăng xuất</button>
+                        </form>
+                    </Authorized>
+                    <NotAuthorized>
+                        <a class="btn btn-sm btn-primary" href="/login">Đăng nhập</a>
+                    </NotAuthorized>
+                </AuthorizeView>
+            </div>
+        </header>
+
+        <main class="admin-content">
+            @Body
+        </main>
+    </div>
+</div>
+
+<Toaster />
+
+<div id="blazor-error-ui">
+    An unhandled error has occurred.
+    <a href="" class="reload">Reload</a>
+    <a class="dismiss">🗙</a>
+</div>

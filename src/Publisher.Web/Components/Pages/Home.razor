@@ -1,0 +1,47 @@
+@page "/"
+@attribute [Authorize]
+
+<PageTitle>Dashboard</PageTitle>
+
+<h1 class="h3 mb-3">Dashboard</h1>
+
+<AuthorizeView>
+    <Authorized>
+        <div class="alert alert-info">
+            Xin chào, <strong>@(context.User.FindFirst("FullName")?.Value ?? context.User.Identity?.Name)</strong>!
+            Chào mừng bạn đến với Multi-Site CMS Publisher.
+        </div>
+    </Authorized>
+</AuthorizeView>
+
+<div class="row g-3">
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Sites</h5>
+                <p class="card-text text-muted">Quản lý các website đích.</p>
+                <a class="btn btn-sm btn-outline-primary" href="/sites">Mở</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Bài viết</h5>
+                <p class="card-text text-muted">Soạn và đăng bài.</p>
+                <a class="btn btn-sm btn-outline-primary" href="/posts">Mở</a>
+            </div>
+        </div>
+    </div>
+    <AuthorizeView Roles="Admin" Context="adminCtx">
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Người dùng</h5>
+                    <p class="card-text text-muted">Quản lý tài khoản (Admin).</p>
+                    <a class="btn btn-sm btn-outline-primary" href="/users">Mở</a>
+                </div>
+            </div>
+        </div>
+    </AuthorizeView>
+</div>

@@ -1,0 +1,17 @@
+{
+  // Copy this file to `appsettings.Development.json` (which is gitignored) for local dev.
+  // In production, supply these via environment variables instead — never commit real secrets.
+  "ConnectionStrings": {
+    // AppDB. Migrations + seed run automatically on startup.
+    "AppDb": "Server=localhost;Database=01MultiSiteCMS;Trusted_Connection=True;TrustServerCertificate=True;MultipleActiveResultSets=True"
+  },
+  "Encryption": {
+    // AES-256-GCM key for site connection strings. DEV ONLY — 32-char raw string (= 32 bytes).
+    // Production MUST override via env var PUBLISHER_ENCRYPTION_KEY (takes precedence over this).
+    // If you lose the prod key, encrypted site connection strings cannot be decrypted.
+    "Key": "dev0123456789abcdef0123456789abc"
+  },
+  "Serilog": {
+    "MinimumLevel": "Information"
+  }
+}

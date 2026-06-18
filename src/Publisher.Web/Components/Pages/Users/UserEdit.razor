@@ -1,0 +1,212 @@
+@page "/users/new"
+@page "/users/{Id:int}/edit"
+@attribute [Authorize(Roles = "Admin")]
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject IAuditLogService Audit
+@inject AuthenticationStateProvider AuthState
+@using Microsoft.EntityFrameworkCore
+@using System.ComponentModel.DataAnnotations
+
+<PageTitle>@(IsNew ? "Thêm người dùng" : "Sửa người dùng")</PageTitle>
+
+<h1 class="h3 mb-3">@(IsNew ? "Thêm người dùng" : "Sửa người dùng")</h1>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger">@_loadError</div>
+}
+else if (_model is null)
+{
+    <p>Đang tải...</p>
+}
+else
+{
+    <EditForm Model="_model" OnValidSubmit="Save" class="card" style="max-width: 36rem;">
+        <DataAnnotationsValidator />
+        <div class="card-body">
+            <div class="mb-3">
+                <label class="form-label">Tên đăng nhập</label>
+                <InputText class="form-control" @bind-Value="_model.Username" disabled="@(!IsNew)" />
+                <ValidationMessage For="() => _model.Username" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Họ tên</label>
+                <InputText class="form-control" @bind-Value="_model.FullName" />
+                <ValidationMessage For="() => _model.FullName" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Email</label>
+                <InputText class="form-control" @bind-Value="_model.Email" />
+                <ValidationMessage For="() => _model.Email" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Vai trò</label>
+                <InputSelect class="form-select" @bind-Value="_model.Role">
+                    @foreach (var role in UserRoles.All)
+                    {
+                        <option value="@role">@role</option>
+                    }
+                </InputSelect>
+            </div>
+            <div class="form-check mb-3">
+                <InputCheckbox class="form-check-input" id="isActive" @bind-Value="_model.IsActive" />
+                <label class="form-check-label" for="isActive">Kích hoạt</label>
+            </div>
+            <div class="mb-3">
+                <label class="form-label">
+                    Mật khẩu @(IsNew ? "" : "(để trống nếu không đổi)")
+                </label>
+                <InputText type="password" class="form-control" @bind-Value="_model.Password" autocomplete="new-password" />
+                <ValidationMessage For="() => _model.Password" />
+            </div>
+        </div>
+        <div class="card-footer d-flex gap-2">
+            <button type="submit" class="btn btn-primary" disabled="@_saving">Lưu</button>
+            <a class="btn btn-outline-secondary" href="/users">Hủy</a>
+        </div>
+    </EditForm>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+
+    private UserFormModel? _model;
+    private string? _loadError;
+    private bool _saving;
+
+    private bool IsNew => Id is null;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (IsNew)
+        {
+            _model = new UserFormModel { Role = UserRoles.Editor, IsActive = true };
+            return;
+        }
+
+        var user = await Db.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == Id);
+        if (user is null)
+        {
+            _loadError = "Không tìm thấy người dùng.";
+            return;
+        }
+
+        _model = new UserFormModel
+        {
+            Username = user.Username,
+            FullName = user.FullName,
+            Email = user.Email,
+            Role = user.Role,
+            IsActive = user.IsActive
+        };
+    }
+
+    private async Task Save()
+    {
+        if (_model is null) return;
+        _saving = true;
+        try
+        {
+            if (IsNew)
+            {
+                if (string.IsNullOrEmpty(_model.Password) || _model.Password.Length < 6)
+                {
+                    Toast.ShowError("Mật khẩu bắt buộc (tối thiểu 6 ký tự) khi tạo mới.");
+                    return;
+                }
+
+                var exists = await Db.Users.AnyAsync(u => u.Username == _model.Username);
+                if (exists)
+                {
+                    Toast.ShowError("Tên đăng nhập đã tồn tại.");
+                    return;
+                }
+
+                var now = DateTime.UtcNow;
+                var user = new User
+                {
+                    Username = _model.Username.Trim(),
+                    FullName = _model.FullName.Trim(),
+                    Email = string.IsNullOrWhiteSpace(_model.Email) ? null : _model.Email.Trim(),
+                    Role = _model.Role,
+                    IsActive = _model.IsActive,
+                    PasswordHash = BCrypt.Net.BCrypt.HashPassword(_model.Password, workFactor: 12),
+                    CreatedAt = now,
+                    UpdatedAt = now
+                };
+                Db.Users.Add(user);
+                await Db.SaveChangesAsync();
+
+                await Audit.WriteAsync("USER_CREATED", userId: await CurrentUserIdAsync(),
+                    entityType: "User", entityId: user.Id.ToString());
+                Toast.ShowSuccess("Đã tạo người dùng.");
+            }
+            else
+            {
+                var user = await Db.Users.FirstOrDefaultAsync(u => u.Id == Id);
+                if (user is null)
+                {
+                    Toast.ShowError("Không tìm thấy người dùng.");
+                    return;
+                }
+
+                user.FullName = _model.FullName.Trim();
+                user.Email = string.IsNullOrWhiteSpace(_model.Email) ? null : _model.Email.Trim();
+                user.Role = _model.Role;
+                user.IsActive = _model.IsActive;
+                user.UpdatedAt = DateTime.UtcNow;
+
+                if (!string.IsNullOrEmpty(_model.Password))
+                {
+                    if (_model.Password.Length < 6)
+                    {
+                        Toast.ShowError("Mật khẩu mới tối thiểu 6 ký tự.");
+                        return;
+                    }
+                    user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(_model.Password, workFactor: 12);
+                }
+
+                await Db.SaveChangesAsync();
+
+                await Audit.WriteAsync("USER_UPDATED", userId: await CurrentUserIdAsync(),
+                    entityType: "User", entityId: user.Id.ToString());
+                Toast.ShowSuccess("Đã cập nhật người dùng.");
+            }
+
+            Nav.NavigateTo("/users");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task<int?> CurrentUserIdAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var raw = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(raw, out var id) ? id : null;
+    }
+
+    public sealed class UserFormModel
+    {
+        [Required, StringLength(50, MinimumLength = 3)]
+        public string Username { get; set; } = string.Empty;
+
+        [Required, StringLength(200)]
+        public string FullName { get; set; } = string.Empty;
+
+        [EmailAddress, StringLength(256)]
+        public string? Email { get; set; }
+
+        [Required]
+        public string Role { get; set; } = UserRoles.Editor;
+
+        public bool IsActive { get; set; } = true;
+
+        [StringLength(100, MinimumLength = 6)]
+        public string? Password { get; set; }
+    }
+}

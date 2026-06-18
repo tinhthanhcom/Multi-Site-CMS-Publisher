@@ -1,0 +1,576 @@
+@page "/sites/{Id:int}/mapping"
+@attribute [Authorize(Roles = "Admin")]
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject IAuditLogService Audit
+@inject ISiteDbConnector Connector
+@inject IConnectionStringEncryptor Encryptor
+@inject InsertCommandBuilder Builder
+@inject AuthenticationStateProvider AuthState
+@using System.Text.Json
+@using Microsoft.EntityFrameworkCore
+@using Publisher.Core.Models
+@using Publisher.Infrastructure.Publishing
+
+<PageTitle>Field Mapping</PageTitle>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger">@_loadError</div>
+    <a class="btn btn-outline-secondary" href="/sites">Quay lại danh sách site</a>
+}
+else if (_model is null)
+{
+    <p>Đang tải...</p>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+            <h1 class="h3 mb-0">Field Mapping @(_mappingExists ? "(sửa)" : "(mới)")</h1>
+            <div class="text-muted">Site: <strong>@_siteName</strong></div>
+        </div>
+        <a class="btn btn-outline-secondary" href="/sites">Quay lại</a>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Bảng đích</div>
+        <div class="card-body">
+            <div class="d-flex gap-2 align-items-end flex-wrap">
+                <div style="min-width: 22rem;">
+                    <label class="form-label">Bảng (schema.name)</label>
+                    <select class="form-select" value="@_selectedTableKey" @onchange="OnTableSelected" disabled="@_loadingTables">
+                        <option value="">-- Chọn bảng --</option>
+                        @foreach (var t in _tables)
+                        {
+                            <option value="@TableKey(t.Schema, t.Name)">@($"{t.Schema}.{t.Name}")</option>
+                        }
+                    </select>
+                </div>
+                <button type="button" class="btn btn-outline-info" disabled="@_loadingTables" @onclick="LoadTables">
+                    @(_loadingTables ? "Đang tải..." : "Tải danh sách bảng")
+                </button>
+            </div>
+            @if (_tablesError is not null)
+            {
+                <div class="small text-danger mt-2">@_tablesError</div>
+            }
+            @if (!_tables.Any() && _tablesLoaded)
+            {
+                <div class="small text-muted mt-2">Không tìm thấy bảng nào (hoặc kết nối thất bại).</div>
+            }
+            @if (_model.TableName.Length > 0 && _columns.Count == 0)
+            {
+                <div class="small text-muted mt-2">
+                    Bảng đã lưu: <strong>@($"{_model.SchemaName}.{_model.TableName}")</strong>.
+                    Bấm "Tải danh sách bảng" rồi chọn lại để load cột (cần kết nối site).
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Ánh xạ cột</div>
+        <div class="card-body">
+            @if (_columnsError is not null)
+            {
+                <div class="alert alert-warning">@_columnsError</div>
+            }
+
+            <h6 class="text-uppercase text-muted small">Bắt buộc</h6>
+            <div class="row">
+                @RenderFieldSelect("Title", _model.FieldTitle, v => _model.FieldTitle = v, required: true)
+                @RenderFieldSelect("Content", _model.FieldContent, v => _model.FieldContent = v, required: true)
+                @RenderFieldSelect("Status", _model.FieldStatus, v => _model.FieldStatus = v, required: true)
+            </div>
+
+            <div class="row">
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Giá trị Status (Draft)</label>
+                    <input class="form-control" value="@_model.StatusValueDraft" @oninput="e => _model.StatusValueDraft = e.Value?.ToString() ?? string.Empty" />
+                </div>
+                <div class="col-md-3 mb-3">
+                    <label class="form-label">Giá trị Status (Published)</label>
+                    <input class="form-control" value="@_model.StatusValuePublished" @oninput="e => _model.StatusValuePublished = e.Value?.ToString() ?? string.Empty" />
+                </div>
+            </div>
+
+            <h6 class="text-uppercase text-muted small mt-2">Tùy chọn</h6>
+            <div class="row">
+                @RenderFieldSelect("Slug", _model.FieldSlug, v => _model.FieldSlug = v)
+                @RenderFieldSelect("Excerpt", _model.FieldExcerpt, v => _model.FieldExcerpt = v)
+                @RenderFieldSelect("Thumbnail", _model.FieldThumbnail, v => _model.FieldThumbnail = v)
+                @RenderFieldSelect("PublishedAt", _model.FieldPublishedAt, v => _model.FieldPublishedAt = v)
+                @RenderFieldSelect("CategoryId", _model.FieldCategoryId, v => _model.FieldCategoryId = v)
+                @RenderFieldSelect("AuthorId", _model.FieldAuthorId, v => _model.FieldAuthorId = v)
+                @RenderFieldSelect("SortOrder", _model.FieldSortOrder, v => _model.FieldSortOrder = v)
+                @RenderFieldSelect("SeoTitle", _model.FieldSeoTitle, v => _model.FieldSeoTitle = v)
+                @RenderFieldSelect("SeoDescription", _model.FieldSeoDescription, v => _model.FieldSeoDescription = v)
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Giá trị mặc định</div>
+        <div class="card-body row">
+            <div class="col-md-4 mb-3">
+                <label class="form-label">Default AuthorId</label>
+                <input class="form-control" value="@_model.DefaultAuthorId" @oninput="e => _model.DefaultAuthorId = NullIfBlank(e.Value?.ToString())" />
+            </div>
+            <div class="col-md-4 mb-3">
+                <label class="form-label">Default CategoryId</label>
+                <input class="form-control" value="@_model.DefaultCategoryId" @oninput="e => _model.DefaultCategoryId = NullIfBlank(e.Value?.ToString())" />
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span>Custom Fields</span>
+            <button type="button" class="btn btn-sm btn-outline-primary" @onclick="AddCustomField">+ Thêm trường</button>
+        </div>
+        <div class="card-body">
+            @if (_customFields.Count == 0)
+            {
+                <div class="text-muted small">Chưa có custom field nào.</div>
+            }
+            else
+            {
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr>
+                            <th>Tên cột</th>
+                            <th>Giá trị mặc định</th>
+                            <th>Kiểu dữ liệu</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @for (var i = 0; i < _customFields.Count; i++)
+                        {
+                            var idx = i;
+                            var cf = _customFields[idx];
+                            <tr>
+                                <td><input class="form-control form-control-sm" value="@cf.FieldName"
+                                           @oninput="e => cf.FieldName = e.Value?.ToString() ?? string.Empty" /></td>
+                                <td><input class="form-control form-control-sm" value="@cf.DefaultValue"
+                                           @oninput="e => cf.DefaultValue = e.Value?.ToString() ?? string.Empty" /></td>
+                                <td>
+                                    <select class="form-select form-select-sm" value="@cf.DataType"
+                                            @onchange="e => SetCustomFieldType(cf, e)">
+                                        @foreach (var dt in DataTypes)
+                                        {
+                                            <option value="@dt">@dt</option>
+                                        }
+                                    </select>
+                                </td>
+                                <td class="text-end">
+                                    <button type="button" class="btn btn-sm btn-outline-danger" @onclick="() => RemoveCustomField(idx)">Xóa</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Kiểm tra</div>
+        <div class="card-body">
+            <div class="d-flex gap-2 flex-wrap mb-3">
+                <button type="button" class="btn btn-outline-secondary" @onclick="PreviewInsert">Xem trước INSERT</button>
+                <button type="button" class="btn btn-outline-warning" disabled="@_validating" @onclick="ValidateMapping">
+                    @(_validating ? "Đang validate..." : "Validate Mapping (INSERT thử + rollback)")
+                </button>
+            </div>
+
+            @if (_preview is not null)
+            {
+                <div class="mb-2"><strong>SQL preview:</strong></div>
+                <pre class="bg-dark text-light p-3 rounded"><code>@_preview.Sql</code></pre>
+                <div class="mb-1"><strong>Tham số:</strong></div>
+                <code>@string.Join(", ", _preview.ParameterNames)</code>
+                <div class="form-text mt-1">Đây chỉ là preview với dữ liệu bài mẫu — không có giá trị thật được lưu.</div>
+            }
+        </div>
+    </div>
+
+    <div class="d-flex gap-2 mb-5">
+        <button type="button" class="btn btn-primary" disabled="@_saving" @onclick="Save">Lưu mapping</button>
+        <a class="btn btn-outline-secondary" href="/sites">Hủy</a>
+    </div>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private static readonly string[] DataTypes = { "string", "int", "bigint", "decimal", "bit", "datetime" };
+
+    private FieldMappingInput? _model;
+    private bool _mappingExists;
+    private string? _siteName;
+    private string? _loadError;
+
+    private List<TableInfo> _tables = new();
+    private List<ColumnInfo> _columns = new();
+    private string _selectedTableKey = string.Empty;
+    private bool _loadingTables;
+    private bool _tablesLoaded;
+    private string? _tablesError;
+    private string? _columnsError;
+
+    private List<CustomFieldDef> _customFields = new();
+    private InsertPreview? _preview;
+    private bool _validating;
+    private bool _saving;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var site = await Db.Sites.AsNoTracking().FirstOrDefaultAsync(s => s.Id == Id);
+        if (site is null)
+        {
+            _loadError = "Không tìm thấy site.";
+            return;
+        }
+        _siteName = site.Name;
+
+        var existing = await Db.SiteFieldMappings.AsNoTracking().FirstOrDefaultAsync(m => m.SiteId == Id);
+        if (existing is not null)
+        {
+            _mappingExists = true;
+            _model = new FieldMappingInput
+            {
+                TableName = existing.TableName,
+                SchemaName = existing.SchemaName,
+                FieldTitle = existing.FieldTitle,
+                FieldContent = existing.FieldContent,
+                FieldStatus = existing.FieldStatus,
+                StatusValueDraft = existing.StatusValueDraft,
+                StatusValuePublished = existing.StatusValuePublished,
+                FieldSlug = existing.FieldSlug,
+                FieldExcerpt = existing.FieldExcerpt,
+                FieldThumbnail = existing.FieldThumbnail,
+                FieldPublishedAt = existing.FieldPublishedAt,
+                FieldCategoryId = existing.FieldCategoryId,
+                FieldAuthorId = existing.FieldAuthorId,
+                FieldSortOrder = existing.FieldSortOrder,
+                FieldSeoTitle = existing.FieldSeoTitle,
+                FieldSeoDescription = existing.FieldSeoDescription,
+                DefaultAuthorId = existing.DefaultAuthorId,
+                DefaultCategoryId = existing.DefaultCategoryId,
+                CustomFieldsJson = existing.CustomFieldsJson
+            };
+            _selectedTableKey = TableKey(existing.SchemaName, existing.TableName);
+            _customFields = ParseCustomFields(existing.CustomFieldsJson);
+        }
+        else
+        {
+            _model = new FieldMappingInput { SchemaName = "dbo" };
+        }
+    }
+
+    private static string TableKey(string schema, string name) => $"{schema}.{name}";
+
+    private async Task LoadTables()
+    {
+        _loadingTables = true;
+        _tablesError = null;
+        try
+        {
+            var tables = await Connector.GetTablesAsync(Id);
+            _tables = tables.ToList();
+            _tablesLoaded = true;
+            if (!_tables.Any())
+                Toast.ShowWarning("Không tìm thấy bảng nào.");
+        }
+        catch (Exception ex)
+        {
+            _tablesError = ex.Message;
+            Toast.ShowError($"Không tải được danh sách bảng: {ex.Message}");
+        }
+        finally
+        {
+            _loadingTables = false;
+        }
+    }
+
+    private async Task OnTableSelected(ChangeEventArgs e)
+    {
+        if (_model is null) return;
+        _selectedTableKey = e.Value?.ToString() ?? string.Empty;
+        _columns = new();
+        _columnsError = null;
+
+        if (string.IsNullOrEmpty(_selectedTableKey))
+        {
+            _model.TableName = string.Empty;
+            return;
+        }
+
+        var parts = _selectedTableKey.Split('.', 2);
+        var schema = parts.Length == 2 ? parts[0] : "dbo";
+        var table = parts.Length == 2 ? parts[1] : parts[0];
+        _model.SchemaName = schema;
+        _model.TableName = table;
+
+        try
+        {
+            var cols = await Connector.GetColumnsAsync(Id, schema, table);
+            _columns = cols.ToList();
+            if (!_columns.Any())
+                _columnsError = "Bảng không có cột nào (hoặc không truy cập được).";
+        }
+        catch (Exception ex)
+        {
+            _columnsError = $"Không tải được cột: {ex.Message}";
+            Toast.ShowError(_columnsError);
+        }
+    }
+
+    /// <summary>
+    /// Renders one logical-field column dropdown. Falls back to a free-text input when columns
+    /// have not been loaded (e.g. site DB unreachable), so a saved mapping is still editable.
+    /// </summary>
+    private RenderFragment RenderFieldSelect(string label, string? current, Action<string> setter, bool required = false) => builder =>
+    {
+        var seq = 0;
+        builder.OpenElement(seq++, "div");
+        builder.AddAttribute(seq++, "class", "col-md-4 mb-3");
+
+        builder.OpenElement(seq++, "label");
+        builder.AddAttribute(seq++, "class", "form-label");
+        builder.AddContent(seq++, label);
+        if (required)
+        {
+            builder.OpenElement(seq++, "span");
+            builder.AddAttribute(seq++, "class", "text-danger");
+            builder.AddContent(seq++, " *");
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+
+        if (_columns.Count > 0)
+        {
+            builder.OpenElement(seq++, "select");
+            builder.AddAttribute(seq++, "class", "form-select");
+            builder.AddAttribute(seq++, "value", current ?? string.Empty);
+            builder.AddAttribute(seq++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => setter(e.Value?.ToString() ?? string.Empty)));
+
+            builder.AddMarkupContent(seq++, required ? "<option value=\"\">-- chọn cột --</option>" : "<option value=\"\">(không)</option>");
+            foreach (var col in _columns)
+            {
+                builder.OpenElement(seq++, "option");
+                builder.AddAttribute(seq++, "value", col.Name);
+                builder.AddContent(seq++, $"{col.Name} ({col.DataType})");
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+        }
+        else
+        {
+            // Free-text fallback (no live column list available).
+            builder.OpenElement(seq++, "input");
+            builder.AddAttribute(seq++, "class", "form-control");
+            builder.AddAttribute(seq++, "value", current ?? string.Empty);
+            builder.AddAttribute(seq++, "placeholder", required ? "tên cột (bắt buộc)" : "tên cột (tùy chọn)");
+            builder.AddAttribute(seq++, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, e => setter(e.Value?.ToString() ?? string.Empty)));
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+    };
+
+    private void AddCustomField() => _customFields.Add(new CustomFieldDef { DataType = "string" });
+
+    private static void SetCustomFieldType(CustomFieldDef cf, ChangeEventArgs e)
+        => cf.DataType = string.IsNullOrEmpty(e.Value?.ToString()) ? "string" : e.Value!.ToString()!;
+
+    private void RemoveCustomField(int index)
+    {
+        if (index >= 0 && index < _customFields.Count)
+            _customFields.RemoveAt(index);
+    }
+
+    private FieldMappingInput? BuildInput()
+    {
+        if (_model is null) return null;
+        var clean = _customFields
+            .Where(c => !string.IsNullOrWhiteSpace(c.FieldName))
+            .ToList();
+        _model.CustomFieldsJson = clean.Count == 0 ? null : JsonSerializer.Serialize(clean);
+        // Normalize optional empties to null so the builder skips them.
+        return _model;
+    }
+
+    private void PreviewInsert()
+    {
+        var input = BuildInput();
+        if (input is null) return;
+        if (!ValidateRequired(input)) return;
+
+        try
+        {
+            var built = Builder.Build(input, SamplePost(), published: false, publishTimeUtc: DateTime.UtcNow);
+            _preview = built.ToPreview();
+            Toast.ShowInfo("Đã tạo preview INSERT.");
+        }
+        catch (Exception ex)
+        {
+            _preview = null;
+            Toast.ShowError($"Không tạo được preview: {ex.Message}");
+        }
+    }
+
+    private async Task ValidateMapping()
+    {
+        var input = BuildInput();
+        if (input is null) return;
+        if (!ValidateRequired(input)) return;
+
+        _validating = true;
+        try
+        {
+            var validator = new MappingValidator(Db, Encryptor, Builder);
+            var result = await validator.ValidateAsync(Id, input);
+            if (result.Success)
+                Toast.ShowSuccess($"Mapping hợp lệ — INSERT thử thành công và đã rollback ({result.DurationMs} ms).");
+            else
+                Toast.ShowError($"Validate thất bại: {result.Error}");
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Lỗi khi validate: {ex.Message}");
+        }
+        finally
+        {
+            _validating = false;
+        }
+    }
+
+    private async Task Save()
+    {
+        var input = BuildInput();
+        if (input is null) return;
+        if (!ValidateRequired(input)) return;
+
+        _saving = true;
+        try
+        {
+            // Sanity: ensure the builder accepts the identifiers before persisting.
+            try
+            {
+                _ = Builder.Build(input, SamplePost(), published: false, publishTimeUtc: DateTime.UtcNow);
+            }
+            catch (Exception ex)
+            {
+                Toast.ShowError($"Mapping không hợp lệ: {ex.Message}");
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+            var entity = await Db.SiteFieldMappings.FirstOrDefaultAsync(m => m.SiteId == Id);
+            if (entity is null)
+            {
+                entity = new SiteFieldMapping
+                {
+                    SiteId = Id,
+                    CreatedBy = await CurrentUserIdAsync() ?? 0,
+                    CreatedAt = now
+                };
+                Db.SiteFieldMappings.Add(entity);
+            }
+
+            entity.TableName = input.TableName.Trim();
+            entity.SchemaName = string.IsNullOrWhiteSpace(input.SchemaName) ? "dbo" : input.SchemaName.Trim();
+            entity.FieldTitle = input.FieldTitle.Trim();
+            entity.FieldContent = input.FieldContent.Trim();
+            entity.FieldStatus = input.FieldStatus.Trim();
+            entity.StatusValueDraft = input.StatusValueDraft;
+            entity.StatusValuePublished = input.StatusValuePublished;
+            entity.FieldSlug = NullIfBlank(input.FieldSlug);
+            entity.FieldExcerpt = NullIfBlank(input.FieldExcerpt);
+            entity.FieldThumbnail = NullIfBlank(input.FieldThumbnail);
+            entity.FieldPublishedAt = NullIfBlank(input.FieldPublishedAt);
+            entity.FieldCategoryId = NullIfBlank(input.FieldCategoryId);
+            entity.FieldAuthorId = NullIfBlank(input.FieldAuthorId);
+            entity.FieldSortOrder = NullIfBlank(input.FieldSortOrder);
+            entity.FieldSeoTitle = NullIfBlank(input.FieldSeoTitle);
+            entity.FieldSeoDescription = NullIfBlank(input.FieldSeoDescription);
+            entity.DefaultAuthorId = NullIfBlank(input.DefaultAuthorId);
+            entity.DefaultCategoryId = NullIfBlank(input.DefaultCategoryId);
+            entity.CustomFieldsJson = input.CustomFieldsJson;
+            entity.UpdatedAt = now;
+
+            await Db.SaveChangesAsync();
+
+            await Audit.WriteAsync("MAPPING_SAVED", userId: await CurrentUserIdAsync(),
+                siteId: Id, entityType: nameof(SiteFieldMapping), entityId: entity.Id.ToString(),
+                details: $"Saved mapping for table [{entity.SchemaName}].[{entity.TableName}].");
+
+            _mappingExists = true;
+            Toast.ShowSuccess("Đã lưu mapping.");
+        }
+        catch (Exception ex)
+        {
+            Toast.ShowError($"Lỗi khi lưu mapping: {ex.Message}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private bool ValidateRequired(FieldMappingInput input)
+    {
+        if (string.IsNullOrWhiteSpace(input.TableName))
+        {
+            Toast.ShowError("Hãy chọn bảng đích.");
+            return false;
+        }
+        if (string.IsNullOrWhiteSpace(input.FieldTitle)
+            || string.IsNullOrWhiteSpace(input.FieldContent)
+            || string.IsNullOrWhiteSpace(input.FieldStatus))
+        {
+            Toast.ShowError("Các cột Title, Content, Status là bắt buộc.");
+            return false;
+        }
+        return true;
+    }
+
+    private static PostPublishData SamplePost() => new()
+    {
+        Title = "Sample Title",
+        Slug = "sample-title",
+        Content = "Sample content",
+        Excerpt = "Sample excerpt",
+        Thumbnail = "https://example.invalid/sample.png",
+        SeoTitle = "Sample SEO title",
+        SeoDescription = "Sample SEO description"
+    };
+
+    private static List<CustomFieldDef> ParseCustomFields(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try
+        {
+            var list = JsonSerializer.Deserialize<List<CustomFieldDef>>(json,
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return list ?? new();
+        }
+        catch
+        {
+            return new();
+        }
+    }
+
+    private static string? NullIfBlank(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    private async Task<int?> CurrentUserIdAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var raw = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(raw, out var id) ? id : null;
+    }
+}

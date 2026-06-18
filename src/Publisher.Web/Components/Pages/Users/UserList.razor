@@ -1,0 +1,107 @@
+@page "/users"
+@attribute [Authorize(Roles = "Admin")]
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject IAuditLogService Audit
+@inject AuthenticationStateProvider AuthState
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>Người dùng</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Người dùng</h1>
+    <a class="btn btn-primary" href="/users/new">+ Thêm người dùng</a>
+</div>
+
+@if (_users is null)
+{
+    <p>Đang tải...</p>
+}
+else
+{
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Tên đăng nhập</th>
+                        <th>Họ tên</th>
+                        <th>Email</th>
+                        <th>Vai trò</th>
+                        <th>Kích hoạt</th>
+                        <th>Đăng nhập gần nhất</th>
+                        <th class="text-end">Thao tác</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var u in _users)
+                    {
+                        <tr>
+                            <td>@u.Username</td>
+                            <td>@u.FullName</td>
+                            <td>@u.Email</td>
+                            <td><span class="badge bg-secondary">@u.Role</span></td>
+                            <td>
+                                @if (u.IsActive)
+                                {
+                                    <span class="badge bg-success">Có</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-danger">Không</span>
+                                }
+                            </td>
+                            <td>@(u.LastLoginAt?.ToString("yyyy-MM-dd HH:mm") ?? "-")</td>
+                            <td class="text-end">
+                                <a class="btn btn-sm btn-outline-primary" href="@($"/users/{u.Id}/edit")">Sửa</a>
+                                @if (u.IsActive)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => ToggleActive(u, false)">Khóa</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-success" @onclick="() => ToggleActive(u, true)">Mở khóa</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private List<User>? _users;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _users = await Db.Users.AsNoTracking().OrderBy(u => u.Username).ToListAsync();
+    }
+
+    private async Task ToggleActive(User user, bool active)
+    {
+        var entity = await Db.Users.FirstOrDefaultAsync(u => u.Id == user.Id);
+        if (entity is null) return;
+
+        entity.IsActive = active;
+        entity.UpdatedAt = DateTime.UtcNow;
+        await Db.SaveChangesAsync();
+
+        await Audit.WriteAsync("USER_UPDATED", userId: await CurrentUserIdAsync(),
+            entityType: "User", entityId: entity.Id.ToString(),
+            details: active ? "Activated" : "Deactivated");
+
+        user.IsActive = active;
+        Toast.ShowSuccess(active ? "Đã mở khóa người dùng." : "Đã khóa người dùng.");
+        StateHasChanged();
+    }
+
+    private async Task<int?> CurrentUserIdAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var raw = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(raw, out var id) ? id : null;
+    }
+}
