@@ -5,6 +5,7 @@ import { GatewayError } from './lib/errors.js';
 import { CodexProvider } from './providers/codexProvider.js';
 import { ClaudeProvider } from './providers/claudeProvider.js';
 import { GeminiProvider } from './providers/geminiProvider.js';
+import { MockProvider } from './providers/mockProvider.js';
 import { Orchestrator } from './providers/orchestrator.js';
 import type { IContentProvider } from './providers/types.js';
 import { registerGenerateRoutes } from './routes/generate.js';
@@ -23,7 +24,7 @@ export async function buildApp(cfg: Config, providers?: IContentProvider[]): Pro
   await app.register(rateLimit, { max: 60, timeWindow: '1 minute' });
 
   const chain: IContentProvider[] =
-    providers ?? [new CodexProvider(cfg), new ClaudeProvider(cfg), new GeminiProvider(cfg)];
+    providers ?? [new CodexProvider(cfg), new ClaudeProvider(cfg), new GeminiProvider(cfg), new MockProvider(cfg)];
   const orchestrator = new Orchestrator(chain, cfg);
 
   registerHealthRoutes(app, cfg, orchestrator);

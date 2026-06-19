@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Publisher.Core.Interfaces;
@@ -16,7 +17,11 @@ namespace Publisher.Infrastructure.AI;
 public sealed class AIContentService : IAIContentService
 {
     // Web defaults => camelCase naming + case-insensitive, matching the gateway's JSON.
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    // Omit null optionals so the gateway's zod .optional() fields aren't sent as null.
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     private readonly HttpClient _http;
     private readonly AIGatewayOptions _options;

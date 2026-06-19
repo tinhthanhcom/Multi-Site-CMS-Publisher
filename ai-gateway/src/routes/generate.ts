@@ -10,15 +10,15 @@ import type { GenerateRequest } from '../types.js';
 export const GenerateBody = z
   .object({
     contentType: z.enum(['article', 'product', 'news', 'social']).default('article'),
-    topic: z.string().trim().min(1).optional(),
-    keywords: z.array(z.string()).default([]),
-    length: z.number().int().positive().max(20_000).default(800),
-    tone: z.string().default('seo-friendly'),
-    language: z.string().min(2).default('vi'),
-    systemPrompt: z.string().optional(),
-    userPrompt: z.string().optional(),
-    translateTo: z.array(z.string().min(2)).default([]),
-    model: z.string().optional(),
+    topic: z.string().trim().min(1).nullish(),
+    keywords: z.array(z.string()).nullish().transform((v) => v ?? []),
+    length: z.number().int().positive().max(20_000).nullish().transform((v) => v ?? 800),
+    tone: z.string().nullish().transform((v) => v ?? 'seo-friendly'),
+    language: z.string().min(2).nullish().transform((v) => v ?? 'vi'),
+    systemPrompt: z.string().nullish(),
+    userPrompt: z.string().nullish(),
+    translateTo: z.array(z.string().min(2)).nullish().transform((v) => v ?? []),
+    model: z.string().nullish(),
   })
   .refine((b) => Boolean(b.topic) || Boolean(b.userPrompt?.trim()), {
     message: 'Either "topic" or "userPrompt" is required',

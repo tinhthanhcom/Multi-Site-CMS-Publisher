@@ -13,6 +13,11 @@ const schema = z.object({
   MAX_CONCURRENCY: z.coerce.number().int().positive().default(3),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   CODEX_BIN: z.string().default('codex'),
+  // Local-only deterministic provider for end-to-end testing without real keys.
+  MOCK_PROVIDER: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 });
 
 export type Config = z.infer<typeof schema> & { providerOrder: string[] };
