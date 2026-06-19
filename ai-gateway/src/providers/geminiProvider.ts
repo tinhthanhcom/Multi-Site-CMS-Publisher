@@ -5,7 +5,7 @@ import { extractArticleJson } from '../lib/articleJson.js';
 import { GatewayError } from '../lib/errors.js';
 import type { IContentProvider, ProviderCallOptions } from './types.js';
 
-const FALLBACK_MODEL = 'gemini-2.0-flash';
+const FALLBACK_MODEL = 'gemini-2.5-flash';
 
 /** Fallback provider 2: Google Gemini. */
 export class GeminiProvider implements IContentProvider {

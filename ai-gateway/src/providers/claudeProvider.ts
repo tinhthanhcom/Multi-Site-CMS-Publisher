@@ -30,13 +30,19 @@ export class ClaudeProvider implements IContentProvider {
       model,
       max_tokens: 4096,
       system: opts.systemPrompt,
-      messages: [{ role: 'user', content: opts.userPrompt }],
+      // Prefill the assistant turn with "{" to force a JSON-object response.
+      messages: [
+        { role: 'user', content: opts.userPrompt },
+        { role: 'assistant', content: '{' },
+      ],
     });
 
-    const text = res.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('');
+    const text =
+      '{' +
+      res.content
+        .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('');
 
     return {
       article: extractArticleJson(text, opts.language),

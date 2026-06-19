@@ -6,7 +6,24 @@ sau Nginx + TLS; CMS gọi vào qua 1 endpoint duy nhất.
 
 ## Yêu cầu
 - Node.js >= 20
-- (Production) `npm i -g @openai/codex` trên VPS + `OPENAI_API_KEY` để codex chạy headless.
+- Để dùng provider **codex**: `npm i -g @openai/codex` rồi đăng nhập (xem dưới).
+
+## Chạy thật với codex CLI
+codex 0.141+ xác thực qua `CODEX_HOME/auth.json` (env `OPENAI_API_KEY` đơn lẻ KHÔNG đủ — sẽ 401).
+Dùng `CODEX_HOME` riêng để không đụng `~/.codex` cá nhân:
+
+```bash
+# 1) đăng nhập bằng API key vào CODEX_HOME riêng (1 lần)
+export CODEX_HOME=/đường/dẫn/codex-home   # vd C:/Users/<you>/.codex-aigw
+printf '%s' "$OPENAI_API_KEY" | codex login --with-api-key
+codex login status            # "Logged in using an API key"
+#   (hoặc ChatGPT login: `codex login`, rồi đặt CODEX_ENABLED=true)
+
+# 2) trỏ gateway tới CODEX_HOME đó trong .env: CODEX_HOME=...
+```
+Lưu ý: gateway truyền prompt cho codex qua **stdin**; trên Windows tự dùng shell để gọi `codex.cmd`.
+`CODEX_MODEL` để trống = dùng model mặc định của codex. Nếu codex chậm/timeout, gateway tự fallback
+sang Claude → Gemini.
 
 ## Chạy local
 ```bash

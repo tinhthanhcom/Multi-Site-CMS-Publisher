@@ -1,3 +1,4 @@
+import 'dotenv/config'; // load .env before reading process.env
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 

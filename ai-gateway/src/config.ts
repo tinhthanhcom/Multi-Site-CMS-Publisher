@@ -13,6 +13,15 @@ const schema = z.object({
   MAX_CONCURRENCY: z.coerce.number().int().positive().default(3),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   CODEX_BIN: z.string().default('codex'),
+  // Force-enable codex even without an API key (e.g. when using ChatGPT login).
+  CODEX_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  // Model passed to `codex exec -m`. Empty => let codex use its own default.
+  CODEX_MODEL: z.string().default(''),
+  // Isolated CODEX_HOME so we never touch the user's existing ~/.codex.
+  CODEX_HOME: z.string().optional(),
   // Local-only deterministic provider for end-to-end testing without real keys.
   MOCK_PROVIDER: z
     .enum(['true', 'false'])

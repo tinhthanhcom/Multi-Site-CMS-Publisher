@@ -4,10 +4,10 @@ import { emptyUsage } from '../types.js';
 import { extractArticleJson } from '../lib/articleJson.js';
 import { GatewayError } from '../lib/errors.js';
 import { parseCodexJsonl } from '../lib/jsonl.js';
-import { runProcess, type RunResult } from '../lib/proc.js';
+import { runProcess, type RunOptions, type RunResult } from '../lib/proc.js';
 import type { IContentProvider, ProviderCallOptions } from './types.js';
 
-type Runner = (bin: string, args: string[], opts: { env?: NodeJS.ProcessEnv; timeoutMs: number }) => Promise<RunResult>;
+type Runner = (bin: string, args: string[], opts: RunOptions) => Promise<RunResult>;
 
 /**
  * Primary provider: drives the codex CLI headless and read-only so it behaves
@@ -20,27 +20,41 @@ export class CodexProvider implements IContentProvider {
   constructor(private readonly cfg: Config, private readonly runner: Runner = runProcess) {}
 
   isAvailable(): boolean {
-    return Boolean(this.cfg.OPENAI_API_KEY || this.cfg.CODEX_API_KEY);
+    // Available with an API key, OR when explicitly enabled (e.g. ChatGPT login).
+    return this.cfg.CODEX_ENABLED === true || Boolean(this.cfg.OPENAI_API_KEY || this.cfg.CODEX_API_KEY);
   }
 
   async complete(opts: ProviderCallOptions): Promise<ProviderResult> {
+    // Prompt is fed via stdin (not argv) to avoid shell-quoting issues and so the
+    // prompt is never exposed on the command line. `codex exec` with no prompt arg
+    // reads its instructions from stdin.
     const prompt = `${opts.systemPrompt}\n\n${opts.userPrompt}`;
+    // `codex exec` is non-interactive by design (no approval prompts); read-only
+    // sandbox keeps it from running shell/editing files — i.e. pure text gen.
     const args = [
       'exec',
       '--json',
       '--sandbox', 'read-only',
-      '--ask-for-approval', 'never',
       '--skip-git-repo-check',
       '--ephemeral',
       '--ignore-user-config',
-      '-m', opts.model,
-      prompt,
     ];
+    // Only pin a model when configured; otherwise let codex use its default.
+    if (this.cfg.CODEX_MODEL) args.push('-m', this.cfg.CODEX_MODEL);
 
-    const key = this.cfg.OPENAI_API_KEY ?? this.cfg.CODEX_API_KEY ?? '';
+    // Inherit the parent env; only set keys/home that are actually configured
+    // (never blank them out — that would break ChatGPT-login auth).
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (this.cfg.CODEX_HOME) env.CODEX_HOME = this.cfg.CODEX_HOME;
+    if (this.cfg.OPENAI_API_KEY) env.OPENAI_API_KEY = this.cfg.OPENAI_API_KEY;
+    if (this.cfg.CODEX_API_KEY) env.CODEX_API_KEY = this.cfg.CODEX_API_KEY;
+
     const result = await this.runner(this.cfg.CODEX_BIN, args, {
-      env: { ...process.env, OPENAI_API_KEY: key, CODEX_API_KEY: this.cfg.CODEX_API_KEY ?? key },
+      env,
       timeoutMs: opts.timeoutMs,
+      input: prompt,
+      // On Windows the CLI is a .cmd shim and must be launched via the shell.
+      shell: process.platform === 'win32',
     });
 
     const extract = parseCodexJsonl(result.stdout);
