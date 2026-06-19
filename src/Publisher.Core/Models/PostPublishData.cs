@@ -19,4 +19,6 @@ public sealed class PostPublishData
     public string? SeoDescription { get; set; }
     /// <summary>JSON object of custom field values.</summary>
     public string? CustomDataJson { get; set; }
+    /// <summary>Language code of this variant (e.g. "vi", "en"). Used for localized-column publishing.</summary>
+    public string Language { get; set; } = "vi";
 }

@@ -17,7 +17,10 @@ public class Site
     // AI Prompt
     public string? SystemPrompt { get; set; }
     public string? DefaultTone { get; set; }
+    /// <summary>Primary/fallback language; must be one of <see cref="SupportedLanguagesJson"/>.</summary>
     public string DefaultLanguage { get; set; } = "vi";
+    /// <summary>JSON array of supported language codes, e.g. ["vi","en"]. NULL/empty = just DefaultLanguage.</summary>
+    public string? SupportedLanguagesJson { get; set; }
 
     // Status
     public bool IsActive { get; set; } = true;

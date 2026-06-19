@@ -124,6 +124,144 @@ public sealed class InsertCommandBuilder
         return new InsertBuildResult(sql, parameters);
     }
 
+    /// <summary>Localized field keys whose value comes from a per-language post.</summary>
+    private static readonly string[] LocalizedFieldOrder =
+        { "Title", "Content", "Excerpt", "Slug", "SeoTitle", "SeoDescription" };
+
+    /// <summary>
+    /// Builds a SINGLE INSERT for a translation group when the remote table stores languages as
+    /// separate columns (e.g. title_vi, title_en). Localized fields are written to the column mapped
+    /// for each language (from <see cref="FieldMappingInput.LocalizedColumnsJson"/>); common fields
+    /// (status, thumbnail, category, author, publishedAt, sort, custom) come from the primary-language post.
+    /// </summary>
+    public InsertBuildResult BuildLocalized(
+        FieldMappingInput mapping,
+        IReadOnlyList<PostPublishData> posts,
+        string primaryLanguage,
+        bool published,
+        DateTime publishTimeUtc)
+    {
+        ArgumentNullException.ThrowIfNull(mapping);
+        ArgumentNullException.ThrowIfNull(posts);
+        if (posts.Count == 0)
+            throw new ArgumentException("At least one post is required.", nameof(posts));
+
+        var localized = ParseLocalizedColumns(mapping.LocalizedColumnsJson);
+        var byLang = posts
+            .GroupBy(p => p.Language ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        var primary = byLang.TryGetValue(primaryLanguage ?? string.Empty, out var pp) ? pp : posts[0];
+
+        var schema = string.IsNullOrWhiteSpace(mapping.SchemaName) ? "dbo" : mapping.SchemaName;
+        var qualifiedTable = SafeIdentifier.QualifiedName(schema, mapping.TableName);
+
+        var columns = new List<string>();
+        var placeholders = new List<string>();
+        var parameters = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        void Add(string columnName, string paramNameForError, object? value)
+        {
+            var validated = SafeIdentifier.Validate(columnName, paramNameForError);
+            var p = "@p" + parameters.Count.ToString(CultureInfo.InvariantCulture);
+            columns.Add($"[{validated}]");
+            placeholders.Add(p);
+            parameters[p] = value;
+        }
+
+        // --- Localized columns: one column per (field, language) that has both a mapping and content. ---
+        foreach (var field in LocalizedFieldOrder)
+        {
+            if (!localized.TryGetValue(field, out var langCols)) continue;
+            foreach (var lang in langCols.Keys.OrderBy(k => k, StringComparer.Ordinal))
+            {
+                var column = langCols[lang];
+                if (string.IsNullOrWhiteSpace(column)) continue;
+                if (!byLang.TryGetValue(lang, out var langPost)) continue; // no content for this language
+                Add(column, $"Localized:{field}:{lang}", GetLocalizedValue(field, langPost));
+            }
+        }
+
+        // --- Common columns (single, from the primary-language post). ---
+        Add(
+            mapping.FieldStatus,
+            nameof(mapping.FieldStatus),
+            published ? mapping.StatusValuePublished : mapping.StatusValueDraft);
+
+        if (!string.IsNullOrWhiteSpace(mapping.FieldThumbnail))
+            Add(mapping.FieldThumbnail, nameof(mapping.FieldThumbnail), primary.Thumbnail);
+
+        if (!string.IsNullOrWhiteSpace(mapping.FieldCategoryId))
+            Add(mapping.FieldCategoryId, nameof(mapping.FieldCategoryId), primary.CategoryId ?? mapping.DefaultCategoryId);
+
+        if (!string.IsNullOrWhiteSpace(mapping.FieldAuthorId))
+            Add(mapping.FieldAuthorId, nameof(mapping.FieldAuthorId), primary.AuthorId ?? mapping.DefaultAuthorId);
+
+        if (!string.IsNullOrWhiteSpace(mapping.FieldSortOrder))
+            Add(mapping.FieldSortOrder, nameof(mapping.FieldSortOrder), null);
+
+        if (!string.IsNullOrWhiteSpace(mapping.FieldPublishedAt))
+            Add(mapping.FieldPublishedAt, nameof(mapping.FieldPublishedAt), published ? publishTimeUtc : (object?)null);
+
+        foreach (var def in ParseCustomFields(mapping.CustomFieldsJson))
+            Add(def.FieldName, "CustomField:" + def.FieldName, CoerceValue(def.DefaultValue, def.DataType));
+
+        if (columns.Count == 0)
+            throw new ArgumentException("No columns to insert — mapping has no localized columns mapped.");
+
+        var sql = new StringBuilder()
+            .Append("INSERT INTO ").Append(qualifiedTable)
+            .Append(" (").Append(string.Join(", ", columns)).Append(')')
+            .Append(" VALUES (").Append(string.Join(", ", placeholders)).Append(");")
+            .Append(" SELECT CAST(SCOPE_IDENTITY() AS NVARCHAR(50));")
+            .ToString();
+
+        return new InsertBuildResult(sql, parameters);
+    }
+
+    private static object? GetLocalizedValue(string field, PostPublishData p) => field.ToLowerInvariant() switch
+    {
+        "title" => p.Title,
+        "content" => p.Content,
+        "excerpt" => p.Excerpt,
+        "slug" => p.Slug,
+        "seotitle" => p.SeoTitle,
+        "seodescription" => p.SeoDescription,
+        _ => null,
+    };
+
+    /// <summary>Parses LocalizedColumnsJson into field → (language → column), dropping blanks.</summary>
+    public static Dictionary<string, Dictionary<string, string>> ParseLocalizedColumns(string? json)
+    {
+        var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(json))
+            return result;
+
+        Dictionary<string, Dictionary<string, string>>? parsed;
+        try
+        {
+            parsed = JsonSerializer.Deserialize<Dictionary<string, Dictionary<string, string>>>(json, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            throw new ArgumentException("LocalizedColumnsJson is not a valid JSON object.", nameof(json), ex);
+        }
+
+        if (parsed is null)
+            return result;
+
+        foreach (var (field, langCols) in parsed)
+        {
+            if (langCols is null) continue;
+            var inner = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (lang, col) in langCols)
+                if (!string.IsNullOrWhiteSpace(col)) inner[lang] = col;
+            if (inner.Count > 0) result[field] = inner;
+        }
+
+        return result;
+    }
+
     private static IEnumerable<CustomFieldDef> ParseCustomFields(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))

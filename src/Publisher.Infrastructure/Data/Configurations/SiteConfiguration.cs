@@ -22,6 +22,7 @@ public sealed class SiteConfiguration : IEntityTypeConfiguration<Site>
         b.Property(x => x.SystemPrompt).HasColumnType("nvarchar(max)");
         b.Property(x => x.DefaultTone).HasColumnType("nvarchar(50)");
         b.Property(x => x.DefaultLanguage).HasColumnType("nvarchar(10)").IsRequired().HasDefaultValue("vi");
+        b.Property(x => x.SupportedLanguagesJson).HasColumnType("nvarchar(max)");
         b.Property(x => x.IsActive).HasColumnType("bit").IsRequired().HasDefaultValue(true);
         b.Property(x => x.LastConnectionTest).HasColumnType("datetime2");
         b.Property(x => x.LastConnectionStatus).HasColumnType("bit");

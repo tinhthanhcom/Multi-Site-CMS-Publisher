@@ -33,6 +33,7 @@ public sealed class SiteFieldMappingConfiguration : IEntityTypeConfiguration<Sit
         b.Property(x => x.DefaultAuthorId).HasColumnType("nvarchar(50)");
         b.Property(x => x.DefaultCategoryId).HasColumnType("nvarchar(50)");
         b.Property(x => x.CustomFieldsJson).HasColumnType("nvarchar(max)");
+        b.Property(x => x.LocalizedColumnsJson).HasColumnType("nvarchar(max)");
         b.Property(x => x.CreatedBy).HasColumnType("int").IsRequired();
         b.Property(x => x.CreatedAt).HasColumnType("datetime2").IsRequired().HasDefaultValueSql("GETUTCDATE()");
         b.Property(x => x.UpdatedAt).HasColumnType("datetime2").IsRequired().HasDefaultValueSql("GETUTCDATE()");

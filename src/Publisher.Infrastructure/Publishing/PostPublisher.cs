@@ -101,19 +101,47 @@ public sealed class PostPublisher : IPostPublisher
             return new PublishResult { Success = false, Error = guardError };
         }
 
+        // 1b. Localized (per-language-column) sites publish the WHOLE translation group as one
+        //     remote row; single-language sites publish just this post.
+        var isLocalized = !string.IsNullOrWhiteSpace(mapping!.LocalizedColumnsJson);
+        List<Post> targetPosts;
+        if (isLocalized && post.TranslationGroupId is Guid groupId)
+        {
+            targetPosts = await _db.Posts
+                .Where(p => p.TranslationGroupId == groupId && p.SiteId == post.SiteId)
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+            if (targetPosts.Count == 0)
+                targetPosts = new List<Post> { post };
+        }
+        else
+        {
+            targetPosts = new List<Post> { post };
+        }
+
         // 2. Mark in-flight so the UI can reflect publishing state.
-        post.Status = PostStatuses.Publishing;
-        post.UpdatedAt = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
+        foreach (var tp in targetPosts)
+        {
+            tp.Status = PostStatuses.Publishing;
+            tp.UpdatedAt = now;
+        }
         await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
         try
         {
             // 3. Build the parameterized INSERT from the mapping + post data.
             var mappingInput = ToMappingInput(mapping!);
-            var publishData = ToPublishData(post);
             var publishTimeUtc = DateTime.UtcNow;
 
-            var build = _builder.Build(mappingInput, publishData, published: true, publishTimeUtc: publishTimeUtc);
+            var build = isLocalized
+                ? _builder.BuildLocalized(
+                    mappingInput,
+                    targetPosts.Select(ToPublishData).ToList(),
+                    site!.DefaultLanguage,
+                    published: true,
+                    publishTimeUtc: publishTimeUtc)
+                : _builder.Build(mappingInput, ToPublishData(post), published: true, publishTimeUtc: publishTimeUtc);
 
             // 4. Decrypt connection string (never logged), open connection, execute in a transaction.
             var connectionString = _encryptor.Decrypt(site!.ConnectionStringEnc);
@@ -135,21 +163,26 @@ public sealed class PostPublisher : IPostPublisher
                 await tx.CommitAsync(ct).ConfigureAwait(false);
             }
 
-            // 5. Success: persist published state.
-            post.Status = PostStatuses.Published;
-            post.PublishedAt = publishTimeUtc;
-            post.RemotePostId = remoteId;
-            post.PublishError = null;
-            post.UpdatedAt = DateTime.UtcNow;
+            // 5. Success: persist published state for the whole group (one shared remote row).
+            var publishedNow = DateTime.UtcNow;
+            foreach (var tp in targetPosts)
+            {
+                tp.Status = PostStatuses.Published;
+                tp.PublishedAt = publishTimeUtc;
+                tp.RemotePostId = remoteId;
+                tp.PublishError = null;
+                tp.UpdatedAt = publishedNow;
+            }
             await _db.SaveChangesAsync(ct).ConfigureAwait(false);
 
+            var langSuffix = isLocalized ? $" ({targetPosts.Count} languages)" : string.Empty;
             await _audit.WriteAsync(
                 action: "POST_PUBLISHED",
                 userId: userId,
                 siteId: post.SiteId,
                 entityType: nameof(Post),
                 entityId: postId.ToString(),
-                details: $"Published into [{mapping!.SchemaName}].[{mapping.TableName}]; RemotePostId={remoteId}.",
+                details: $"Published into [{mapping!.SchemaName}].[{mapping.TableName}]; RemotePostId={remoteId}{langSuffix}.",
                 isSuccess: true,
                 durationMs: (int)Math.Min(sw.ElapsedMilliseconds, int.MaxValue),
                 ct: ct).ConfigureAwait(false);
@@ -163,10 +196,14 @@ public sealed class PostPublisher : IPostPublisher
             var error = ex.Message;
             _logger.LogError(ex, "Failed to publish post {PostId} to site {SiteId}", postId, post.SiteId);
 
-            post.Status = PostStatuses.Failed;
-            post.PublishError = error;
-            post.RetryCount += 1;
-            post.UpdatedAt = DateTime.UtcNow;
+            var failedNow = DateTime.UtcNow;
+            foreach (var tp in targetPosts)
+            {
+                tp.Status = PostStatuses.Failed;
+                tp.PublishError = error;
+                tp.RetryCount += 1;
+                tp.UpdatedAt = failedNow;
+            }
             try
             {
                 await _db.SaveChangesAsync(ct).ConfigureAwait(false);
@@ -213,6 +250,7 @@ public sealed class PostPublisher : IPostPublisher
         DefaultAuthorId = m.DefaultAuthorId,
         DefaultCategoryId = m.DefaultCategoryId,
         CustomFieldsJson = m.CustomFieldsJson,
+        LocalizedColumnsJson = m.LocalizedColumnsJson,
     };
 
     private static PostPublishData ToPublishData(Post p) => new()
@@ -227,6 +265,7 @@ public sealed class PostPublisher : IPostPublisher
         SeoTitle = p.SeoTitle,
         SeoDescription = p.SeoDescription,
         CustomDataJson = p.CustomDataJson,
+        Language = p.Language,
     };
 
     /// <summary>Ensures a sensible connect timeout without mutating other settings.</summary>

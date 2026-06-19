@@ -18,6 +18,12 @@ public class Post
     public string? SeoDescription { get; set; }
     public string? CustomDataJson { get; set; }
 
+    // Multi-language
+    /// <summary>BCP-47/ISO language code of this variant (e.g. "vi", "en").</summary>
+    public string Language { get; set; } = "vi";
+    /// <summary>Groups the language variants of one logical post. NULL = standalone (single language).</summary>
+    public Guid? TranslationGroupId { get; set; }
+
     // Status
     /// <summary>'draft' | 'scheduled' | 'publishing' | 'published' | 'failed' (CK_Posts_Status).</summary>
     public string Status { get; set; } = Enums.PostStatuses.Draft;

@@ -37,6 +37,13 @@ public class SiteFieldMapping
     /// <summary>JSON array of <see cref="Models.CustomFieldDef"/>.</summary>
     public string? CustomFieldsJson { get; set; }
 
+    /// <summary>
+    /// Per-language column names for localized fields, when the remote table stores languages as
+    /// separate columns (e.g. title_vi, title_en). JSON: { "Title": {"vi":"title_vi","en":"title_en"}, ... }.
+    /// NULL/empty = single-language site (use the FieldXxx columns above).
+    /// </summary>
+    public string? LocalizedColumnsJson { get; set; }
+
     // Audit
     public int CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }

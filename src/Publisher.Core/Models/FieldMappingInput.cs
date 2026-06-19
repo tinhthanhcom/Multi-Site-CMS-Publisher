@@ -36,4 +36,10 @@ public sealed class FieldMappingInput
 
     /// <summary>JSON array of <see cref="CustomFieldDef"/>.</summary>
     public string? CustomFieldsJson { get; set; }
+
+    /// <summary>
+    /// Per-language column names for localized fields (Title/Content/Excerpt/Slug/SeoTitle/SeoDescription),
+    /// JSON: { "Title": {"vi":"title_vi","en":"title_en"}, ... }. NULL/empty = single-language.
+    /// </summary>
+    public string? LocalizedColumnsJson { get; set; }
 }

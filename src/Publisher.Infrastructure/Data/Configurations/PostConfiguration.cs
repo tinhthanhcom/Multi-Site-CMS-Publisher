@@ -25,6 +25,8 @@ public sealed class PostConfiguration : IEntityTypeConfiguration<Post>
         b.Property(x => x.SeoTitle).HasColumnType("nvarchar(300)");
         b.Property(x => x.SeoDescription).HasColumnType("nvarchar(500)");
         b.Property(x => x.CustomDataJson).HasColumnType("nvarchar(max)");
+        b.Property(x => x.Language).HasColumnType("nvarchar(10)").IsRequired().HasDefaultValue("vi");
+        b.Property(x => x.TranslationGroupId).HasColumnType("uniqueidentifier");
         b.Property(x => x.Status).HasColumnType("nvarchar(20)").IsRequired().HasDefaultValue("draft");
         b.Property(x => x.ScheduledAt).HasColumnType("datetime2");
         b.Property(x => x.PublishedAt).HasColumnType("datetime2");
@@ -43,6 +45,9 @@ public sealed class PostConfiguration : IEntityTypeConfiguration<Post>
         b.HasIndex(x => x.ScheduledAt)
             .HasDatabaseName("IX_Posts_ScheduledAt")
             .HasFilter("[Status] = 'scheduled'");
+        b.HasIndex(x => x.TranslationGroupId)
+            .HasDatabaseName("IX_Posts_TranslationGroupId")
+            .HasFilter("[TranslationGroupId] IS NOT NULL");
 
         b.HasOne(x => x.Site)
             .WithMany(s => s.Posts)
