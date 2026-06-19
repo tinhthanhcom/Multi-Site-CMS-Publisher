@@ -11,7 +11,7 @@
 @inject IAIContentService AI
 @inject Microsoft.Extensions.Options.IOptions<Publisher.Core.Options.AIGatewayOptions> AIOptions
 @using Microsoft.EntityFrameworkCore
-@using System.ComponentModel.DataAnnotations
+@using System.Text.Json
 @using Publisher.Core.Entities
 @using Publisher.Core.Enums
 @using Publisher.Core.Models
@@ -27,7 +27,7 @@
     <div class="alert alert-danger">@_loadError</div>
     <a class="btn btn-outline-secondary" href="/posts">Quay lại danh sách</a>
 }
-else if (_model is null)
+else if (!_loaded)
 {
     <p>Đang tải...</p>
 }
@@ -37,9 +37,9 @@ else
     {
         <div class="alert alert-warning">
             Bài viết ở trạng thái <strong>@_currentStatus</strong> chỉ có thể xem, không thể chỉnh sửa.
-            @if (_currentStatus == PostStatuses.Published && !string.IsNullOrEmpty(_model.RemotePostId))
+            @if (_currentStatus == PostStatuses.Published && !string.IsNullOrEmpty(_shared.RemotePostId))
             {
-                <span>Remote ID: <strong>@_model.RemotePostId</strong></span>
+                <span>Remote ID: <strong>@_shared.RemotePostId</strong></span>
             }
         </div>
     }
@@ -51,202 +51,255 @@ else
         </div>
     }
 
-    <EditForm Model="_model" OnValidSubmit="SaveDraft">
-        <DataAnnotationsValidator />
-        <div class="row">
-            <div class="col-lg-8">
-                <div class="card mb-3">
-                    <div class="card-body">
-                        <div class="mb-3">
-                            <label class="form-label">Site <span class="text-danger">*</span></label>
-                            <InputSelect class="form-select" @bind-Value="_model.SiteId" disabled="@(!_canEdit || !IsNew)">
-                                <option value="0">-- Chọn site --</option>
-                                @foreach (var s in _mappedSites)
+    <div class="row">
+        <div class="col-lg-8">
+            <div class="card mb-3">
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Site <span class="text-danger">*</span></label>
+                        <select class="form-select" value="@_shared.SiteId" disabled="@(!_canEdit || !IsNew)"
+                                @onchange="OnSiteChanged">
+                            <option value="0">-- Chọn site --</option>
+                            @foreach (var s in _mappedSites)
+                            {
+                                <option value="@s.Id">@s.Name</option>
+                            }
+                        </select>
+                        @if (_siteLanguages.Count > 1)
+                        {
+                            <div class="form-text">Site đa ngôn ngữ: @string.Join(", ", _siteLanguages) (chính: @_primaryLanguage).</div>
+                        }
+                    </div>
+
+                    @if (_shared.SiteId <= 0)
+                    {
+                        <div class="text-muted">Chọn site để bắt đầu soạn nội dung.</div>
+                    }
+                    else
+                    {
+                        @if (_siteLanguages.Count > 1)
+                        {
+                            <ul class="nav nav-tabs mb-3">
+                                @foreach (var lang in _siteLanguages)
                                 {
-                                    <option value="@s.Id">@s.Name</option>
+                                    <li class="nav-item">
+                                        <button type="button" class="nav-link @(lang == _activeTab ? "active" : "")"
+                                                @onclick="() => _activeTab = lang">
+                                            @lang @(lang == _primaryLanguage ? "★" : "")
+                                            @if (!string.IsNullOrWhiteSpace(LangModel(lang).Title))
+                                            {
+                                                <span class="text-success">●</span>
+                                            }
+                                        </button>
+                                    </li>
                                 }
-                            </InputSelect>
-                            <ValidationMessage For="() => _model.SiteId" />
-                        </div>
+                            </ul>
+                        }
 
-                        <div class="mb-3">
-                            <label class="form-label">Tiêu đề <span class="text-danger">*</span></label>
-                            <InputText class="form-control" @bind-Value="_model.Title" @bind-Value:after="OnTitleChanged" disabled="@(!_canEdit)" />
-                            <ValidationMessage For="() => _model.Title" />
-                        </div>
-
-                        <div class="mb-3">
-                            <label class="form-label">Slug</label>
-                            <div class="input-group">
-                                <InputText class="form-control" @bind-Value="_model.Slug" disabled="@(!_canEdit)" />
-                                <button type="button" class="btn btn-outline-secondary" @onclick="RegenerateSlug" disabled="@(!_canEdit)">
-                                    Tạo lại
-                                </button>
+                        @foreach (var lang in EditorLanguages())
+                        {
+                            var m = LangModel(lang);
+                            <div class="@(_siteLanguages.Count > 1 && lang != _activeTab ? "d-none" : "")">
+                                <div class="mb-3">
+                                    <label class="form-label">Tiêu đề (@lang) <span class="text-danger">*</span></label>
+                                    <input class="form-control" value="@m.Title" disabled="@(!_canEdit)"
+                                           @oninput="e => OnTitleInput(lang, e.Value?.ToString())" />
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Slug (@lang)</label>
+                                    <div class="input-group">
+                                        <input class="form-control" value="@m.Slug" disabled="@(!_canEdit)"
+                                               @oninput="e => m.Slug = e.Value?.ToString()" />
+                                        <button type="button" class="btn btn-outline-secondary" disabled="@(!_canEdit)"
+                                                @onclick="() => m.Slug = SlugGenerator.Generate(m.Title)">Tạo lại</button>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Nội dung (@lang)</label>
+                                    <div id="@EditorId(lang)" style="min-height: 280px;"></div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Tóm tắt (@lang)</label>
+                                    <textarea class="form-control" rows="2" disabled="@(!_canEdit)"
+                                              value="@m.Excerpt" @oninput="e => m.Excerpt = e.Value?.ToString()"></textarea>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">SEO Title (@lang)</label>
+                                        <input class="form-control" value="@m.SeoTitle" disabled="@(!_canEdit)"
+                                               @oninput="e => m.SeoTitle = e.Value?.ToString()" />
+                                    </div>
+                                    <div class="col-md-6 mb-3">
+                                        <label class="form-label">SEO Description (@lang)</label>
+                                        <input class="form-control" value="@m.SeoDescription" disabled="@(!_canEdit)"
+                                               @oninput="e => m.SeoDescription = e.Value?.ToString()" />
+                                    </div>
+                                </div>
                             </div>
-                            <div class="form-text">Tự sinh từ tiêu đề; có thể chỉnh tay.</div>
-                        </div>
+                        }
+                    }
+                </div>
+            </div>
+        </div>
 
-                        <div class="mb-3">
-                            <label class="form-label">Nội dung</label>
-                            <div @ref="_editorRef" id="@_editorId" style="min-height: 280px;"></div>
-                        </div>
-
-                        <div class="mb-3">
-                            <label class="form-label">Tóm tắt</label>
-                            <InputTextArea class="form-control" rows="2" @bind-Value="_model.Excerpt" disabled="@(!_canEdit)" />
-                        </div>
+        <div class="col-lg-4">
+            <div class="card mb-3">
+                <div class="card-header">Thông tin chung</div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Ảnh đại diện (URL)</label>
+                        <input class="form-control" value="@_shared.Thumbnail" disabled="@(!_canEdit)"
+                               @oninput="e => _shared.Thumbnail = e.Value?.ToString()" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Category ID</label>
+                        <input class="form-control" value="@_shared.CategoryId" disabled="@(!_canEdit)"
+                               @oninput="e => _shared.CategoryId = e.Value?.ToString()" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Author ID</label>
+                        <input class="form-control" value="@_shared.AuthorId" disabled="@(!_canEdit)"
+                               @oninput="e => _shared.AuthorId = e.Value?.ToString()" />
                     </div>
                 </div>
             </div>
 
-            <div class="col-lg-4">
-                <div class="card mb-3">
-                    <div class="card-header">Thông tin thêm</div>
-                    <div class="card-body">
-                        <div class="mb-3">
-                            <label class="form-label">Ảnh đại diện (URL)</label>
-                            <InputText class="form-control" @bind-Value="_model.Thumbnail" disabled="@(!_canEdit)" />
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Category ID</label>
-                            <InputText class="form-control" @bind-Value="_model.CategoryId" disabled="@(!_canEdit)" />
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">Author ID</label>
-                            <InputText class="form-control" @bind-Value="_model.AuthorId" disabled="@(!_canEdit)" />
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">SEO Title</label>
-                            <InputText class="form-control" @bind-Value="_model.SeoTitle" disabled="@(!_canEdit)" />
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label">SEO Description</label>
-                            <InputTextArea class="form-control" rows="2" @bind-Value="_model.SeoDescription" disabled="@(!_canEdit)" />
-                        </div>
+            @if (_canEdit && _aiEnabled && _shared.SiteId > 0)
+            {
+                <div class="card mb-3 border-info">
+                    <div class="card-header bg-info-subtle d-flex justify-content-between align-items-center">
+                        <span><span class="bi bi-robot" aria-hidden="true"></span> AI Viết</span>
+                        <button type="button" class="btn btn-sm btn-outline-info" @onclick="() => _aiOpen = !_aiOpen">
+                            @(_aiOpen ? "Ẩn" : "Mở")
+                        </button>
                     </div>
-                </div>
-
-                @if (_canEdit && _aiEnabled)
-                {
-                    <div class="card mb-3 border-info">
-                        <div class="card-header bg-info-subtle d-flex justify-content-between align-items-center">
-                            <span><span class="bi bi-robot" aria-hidden="true"></span> AI Viết</span>
-                            <button type="button" class="btn btn-sm btn-outline-info" @onclick="() => _aiOpen = !_aiOpen">
-                                @(_aiOpen ? "Ẩn" : "Mở")
-                            </button>
-                        </div>
-                        @if (_aiOpen)
-                        {
-                            <div class="card-body">
-                                <div class="mb-2">
-                                    <label class="form-label">Chủ đề <span class="text-danger">*</span></label>
-                                    <input class="form-control form-control-sm" @bind="_aiTopic" placeholder="VD: Lợi ích của cà phê" />
+                    @if (_aiOpen)
+                    {
+                        <div class="card-body">
+                            <div class="mb-2">
+                                <label class="form-label">Chủ đề <span class="text-danger">*</span></label>
+                                <input class="form-control form-control-sm" @bind="_aiTopic" placeholder="VD: Lợi ích của cà phê" />
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">Từ khóa (phẩy)</label>
+                                <input class="form-control form-control-sm" @bind="_aiKeywords" placeholder="cà phê, sức khỏe" />
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">Template</label>
+                                <select class="form-select form-select-sm" @bind="_aiTemplateId">
+                                    <option value="0">-- Không dùng template --</option>
+                                    @foreach (var t in _templates)
+                                    {
+                                        <option value="@t.Id">@t.Name @(t.SiteId is null ? "(global)" : "")</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="row g-2 mb-2">
+                                <div class="col-7">
+                                    <label class="form-label">Giọng văn</label>
+                                    <input class="form-control form-control-sm" @bind="_aiTone" />
                                 </div>
-                                <div class="mb-2">
-                                    <label class="form-label">Từ khóa (phẩy)</label>
-                                    <input class="form-control form-control-sm" @bind="_aiKeywords" placeholder="cà phê, sức khỏe" />
+                                <div class="col-5">
+                                    <label class="form-label">Độ dài</label>
+                                    <input type="number" class="form-control form-control-sm" @bind="_aiLength" />
                                 </div>
-                                <div class="mb-2">
-                                    <label class="form-label">Template</label>
-                                    <select class="form-select form-select-sm" @bind="_aiTemplateId">
-                                        <option value="0">-- Không dùng template --</option>
-                                        @foreach (var t in _templates)
-                                        {
-                                            <option value="@t.Id">@t.Name @(t.SiteId is null ? "(global)" : "")</option>
-                                        }
-                                    </select>
+                            </div>
+                            @if (_siteLanguages.Count > 1)
+                            {
+                                <div class="form-text mb-2">
+                                    Sẽ sinh bản gốc (@_primaryLanguage) + dịch sang: @string.Join(", ", OtherLanguages()) và lấp vào các tab.
                                 </div>
-                                <div class="row g-2 mb-2">
-                                    <div class="col-7">
-                                        <label class="form-label">Giọng văn</label>
-                                        <input class="form-control form-control-sm" @bind="_aiTone" />
-                                    </div>
-                                    <div class="col-5">
-                                        <label class="form-label">Độ dài</label>
-                                        <input type="number" class="form-control form-control-sm" @bind="_aiLength" />
-                                    </div>
-                                </div>
+                            }
+                            else
+                            {
                                 <div class="mb-2">
                                     <label class="form-label">Dịch sang (mã ngôn ngữ, phẩy)</label>
                                     <input class="form-control form-control-sm" @bind="_aiTranslateTo" placeholder="en, ja" />
                                 </div>
-                                <button type="button" class="btn btn-info w-100" disabled="@_aiBusy" @onclick="GenerateAi">
-                                    @(_aiBusy ? "Đang sinh nội dung..." : "Sinh nội dung")
-                                </button>
+                            }
+                            <button type="button" class="btn btn-info w-100" disabled="@_aiBusy" @onclick="GenerateAi">
+                                @(_aiBusy ? "Đang sinh nội dung..." : "Sinh nội dung")
+                            </button>
 
-                                @if (_aiError is not null)
+                            @if (_aiError is not null)
+                            {
+                                <div class="alert alert-danger mt-2 mb-0 py-2 small">@_aiError</div>
+                            }
+                            @if (_lastResult is not null)
+                            {
+                                <div class="mt-2 small text-muted">
+                                    Nguồn: <strong>@_lastResult.Provider</strong> · @_lastResult.Usage.TotalTokens tokens · @_lastResult.DurationMs ms
+                                </div>
+                                @if (_siteLanguages.Count <= 1 && _lastResult.Translations.Count > 0)
                                 {
-                                    <div class="alert alert-danger mt-2 mb-0 py-2 small">@_aiError</div>
-                                }
-                                @if (_lastResult is not null)
-                                {
-                                    <div class="mt-2 small text-muted">
-                                        Nguồn: <strong>@_lastResult.Provider</strong> · @_lastResult.Usage.TotalTokens tokens · @_lastResult.DurationMs ms
-                                    </div>
-                                    @if (_lastResult.Translations.Count > 0)
+                                    <hr class="my-2" />
+                                    <div class="fw-semibold small mb-1">Bản dịch — tạo nháp sang site khác:</div>
+                                    @foreach (var tr in _lastResult.Translations)
                                     {
-                                        <hr class="my-2" />
-                                        <div class="fw-semibold small mb-1">Bản dịch — tạo nháp:</div>
-                                        @foreach (var tr in _lastResult.Translations)
-                                        {
-                                            <div class="d-flex gap-1 align-items-center mb-1">
-                                                <span class="badge bg-secondary">@tr.Language</span>
-                                                <span class="text-truncate small flex-grow-1" title="@tr.Title">@tr.Title</span>
-                                                <select class="form-select form-select-sm" style="width:auto" @bind="_translationSite">
-                                                    <option value="0">site...</option>
-                                                    @foreach (var s in _mappedSites)
-                                                    {
-                                                        <option value="@s.Id">@s.Name</option>
-                                                    }
-                                                </select>
-                                                <button type="button" class="btn btn-sm btn-outline-success"
-                                                        @onclick="() => CreateTranslationDraft(tr)">Tạo</button>
-                                            </div>
-                                        }
+                                        <div class="d-flex gap-1 align-items-center mb-1">
+                                            <span class="badge bg-secondary">@tr.Language</span>
+                                            <span class="text-truncate small flex-grow-1" title="@tr.Title">@tr.Title</span>
+                                            <select class="form-select form-select-sm" style="width:auto" @bind="_translationSite">
+                                                <option value="0">site...</option>
+                                                @foreach (var s in _mappedSites)
+                                                {
+                                                    <option value="@s.Id">@s.Name</option>
+                                                }
+                                            </select>
+                                            <button type="button" class="btn btn-sm btn-outline-success"
+                                                    @onclick="() => CreateTranslationDraft(tr)">Tạo</button>
+                                        </div>
                                     }
                                 }
-                            </div>
-                        }
-                    </div>
-                }
-
-                @if (_canEdit)
-                {
-                    <div class="card mb-3">
-                        <div class="card-header">Lên lịch</div>
-                        <div class="card-body">
-                            <label class="form-label">Thời điểm đăng</label>
-                            <input type="datetime-local" class="form-control mb-2" @bind="_scheduleLocal" />
-                            <button type="button" class="btn btn-outline-info w-100" disabled="@_busy" @onclick="Schedule">
-                                Lưu lịch đăng
-                            </button>
+                            }
                         </div>
-                    </div>
-                }
-            </div>
-        </div>
+                    }
+                </div>
+            }
 
-        @if (_canEdit)
-        {
-            <div class="d-flex gap-2 mb-4">
-                <button type="submit" class="btn btn-primary" disabled="@_busy">Lưu nháp</button>
-                <button type="button" class="btn btn-success" disabled="@_busy" @onclick="PublishNow">Đăng ngay</button>
-                <a class="btn btn-outline-secondary" href="/posts">Hủy</a>
-            </div>
-        }
-        else
-        {
-            <div class="mb-4">
-                <a class="btn btn-outline-secondary" href="/posts">Quay lại</a>
-            </div>
-        }
-    </EditForm>
+            @if (_canEdit && _shared.SiteId > 0)
+            {
+                <div class="card mb-3">
+                    <div class="card-header">Lên lịch</div>
+                    <div class="card-body">
+                        <label class="form-label">Thời điểm đăng</label>
+                        <input type="datetime-local" class="form-control mb-2" @bind="_scheduleLocal" />
+                        <button type="button" class="btn btn-outline-info w-100" disabled="@_busy" @onclick="Schedule">
+                            Lưu lịch đăng
+                        </button>
+                    </div>
+                </div>
+            }
+        </div>
+    </div>
+
+    @if (_canEdit)
+    {
+        <div class="d-flex gap-2 mb-4">
+            <button type="button" class="btn btn-primary" disabled="@_busy" @onclick="SaveDraft">Lưu nháp</button>
+            <button type="button" class="btn btn-success" disabled="@_busy" @onclick="PublishNow">Đăng ngay</button>
+            <a class="btn btn-outline-secondary" href="/posts">Hủy</a>
+        </div>
+    }
+    else
+    {
+        <div class="mb-4">
+            <a class="btn btn-outline-secondary" href="/posts">Quay lại</a>
+        </div>
+    }
 }
 
 @code {
     [Parameter] public int? Id { get; set; }
 
-    private PostFormModel? _model;
+    private readonly SharedModel _shared = new();
+    private readonly Dictionary<string, LangContent> _lang = new(StringComparer.OrdinalIgnoreCase);
+    private List<string> _siteLanguages = new();
+    private string _primaryLanguage = "vi";
+    private string _activeTab = "vi";
+    private Guid? _groupId;
+
+    private bool _loaded;
     private string? _loadError;
     private bool _busy;
     private bool _canEdit = true;
@@ -254,10 +307,9 @@ else
     private bool _noMappedSites;
 
     private List<SiteOption> _mappedSites = new();
-    private ElementReference _editorRef;
-    private readonly string _editorId = "quill-" + Guid.NewGuid().ToString("N");
     private IJSObjectReference? _module;
-    private bool _editorReady;
+    private readonly HashSet<string> _editorsInited = new();
+    private readonly string _editorSuffix = Guid.NewGuid().ToString("N");
 
     private DateTime? _scheduleLocal;
 
@@ -275,25 +327,32 @@ else
     private int _translationSite;
     private List<AIPromptTemplate> _templates = new();
     private AIGenerateResult? _lastResult;
-    // Persisted to the Post on save.
     private bool _aiGenerated;
     private string? _aiPromptUsed;
     private int? _aiTokensUsed;
 
     private bool IsNew => Id is null;
 
+    private string EditorId(string lang) => $"quill-{lang}-{_editorSuffix}";
+    private IEnumerable<string> EditorLanguages() => _siteLanguages.Count > 0 ? _siteLanguages : new List<string> { _primaryLanguage };
+    private IEnumerable<string> OtherLanguages() => _siteLanguages.Where(l => !string.Equals(l, _primaryLanguage, StringComparison.OrdinalIgnoreCase));
+
+    private LangContent LangModel(string lang)
+    {
+        if (!_lang.TryGetValue(lang, out var m)) { m = new LangContent(); _lang[lang] = m; }
+        return m;
+    }
+
     protected override async Task OnParametersSetAsync()
     {
-        // Active sites that HAVE a field mapping configured.
         _mappedSites = await Db.Sites
             .AsNoTracking()
             .Where(s => s.IsActive && s.FieldMapping != null)
             .OrderBy(s => s.Name)
-            .Select(s => new SiteOption { Id = s.Id, Name = s.Name })
+            .Select(s => new SiteOption { Id = s.Id, Name = s.Name, DefaultLanguage = s.DefaultLanguage, SupportedLanguagesJson = s.SupportedLanguagesJson })
             .ToListAsync();
         _noMappedSites = _mappedSites.Count == 0;
 
-        // AI panel availability + active prompt templates (global + per-site).
         _aiEnabled = AIOptions.Value.IsConfigured;
         if (_aiEnabled)
         {
@@ -305,9 +364,9 @@ else
 
         if (IsNew)
         {
-            _model ??= new PostFormModel();
             _canEdit = true;
             _currentStatus = PostStatuses.Draft;
+            _loaded = true;
             return;
         }
 
@@ -315,144 +374,172 @@ else
         if (post is null)
         {
             _loadError = "Không tìm thấy bài viết.";
+            _loaded = true;
             return;
         }
 
         _currentStatus = post.Status;
-        // Editing/deleting only in draft/scheduled; failed can be retried (re-publish) from editor too.
         _canEdit = post.Status is PostStatuses.Draft or PostStatuses.Scheduled or PostStatuses.Failed;
 
-        _model = new PostFormModel
+        var site = await Db.Sites.AsNoTracking().FirstOrDefaultAsync(s => s.Id == post.SiteId);
+        SetLanguagesFor(site?.SupportedLanguagesJson, site?.DefaultLanguage ?? post.Language);
+        _groupId = post.TranslationGroupId;
+
+        _shared.SiteId = post.SiteId;
+        _shared.Thumbnail = post.Thumbnail;
+        _shared.CategoryId = post.CategoryId;
+        _shared.AuthorId = post.AuthorId;
+        _shared.RemotePostId = post.RemotePostId;
+
+        // Load all language variants of this group (or just this post).
+        List<Post> variants = _groupId is Guid gid
+            ? await Db.Posts.AsNoTracking().Where(p => p.TranslationGroupId == gid && p.SiteId == post.SiteId).ToListAsync()
+            : new List<Post> { post };
+        foreach (var v in variants)
         {
-            SiteId = post.SiteId,
-            Title = post.Title,
-            Slug = post.Slug,
-            Content = post.Content,
-            Excerpt = post.Excerpt,
-            Thumbnail = post.Thumbnail,
-            CategoryId = post.CategoryId,
-            AuthorId = post.AuthorId,
-            SeoTitle = post.SeoTitle,
-            SeoDescription = post.SeoDescription,
-            RemotePostId = post.RemotePostId,
-        };
+            _lang[v.Language] = new LangContent
+            {
+                Title = v.Title,
+                Slug = v.Slug,
+                Content = v.Content,
+                Excerpt = v.Excerpt,
+                SeoTitle = v.SeoTitle,
+                SeoDescription = v.SeoDescription,
+            };
+        }
         _scheduleLocal = post.ScheduledAt?.ToLocalTime();
+        _loaded = true;
+    }
+
+    private void SetLanguagesFor(string? supportedJson, string? defaultLang)
+    {
+        _siteLanguages = ParseLanguages(supportedJson, defaultLang ?? "vi");
+        _primaryLanguage = !string.IsNullOrWhiteSpace(defaultLang) && _siteLanguages.Contains(defaultLang!)
+            ? defaultLang!
+            : _siteLanguages.FirstOrDefault() ?? "vi";
+        _activeTab = _primaryLanguage;
+    }
+
+    private async Task OnSiteChanged(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var siteId)) siteId = 0;
+        _shared.SiteId = siteId;
+
+        // Dispose existing editors; the new language set re-inits in OnAfterRender.
+        await DisposeEditorsAsync();
+        _editorsInited.Clear();
+        _lang.Clear();
+
+        var opt = _mappedSites.FirstOrDefault(s => s.Id == siteId);
+        if (opt is not null)
+            SetLanguagesFor(opt.SupportedLanguagesJson, opt.DefaultLanguage);
+        else
+            _siteLanguages = new();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_model is null || _loadError is not null)
-            return;
+        if (!_loaded || _loadError is not null || _shared.SiteId <= 0) return;
 
-        if (!_editorReady)
+        if (_module is null)
         {
-            _editorReady = true;
+            try { _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/quill-interop.js"); }
+            catch { _module = null; }
+        }
+        if (_module is null) return;
+
+        foreach (var lang in EditorLanguages())
+        {
+            var id = EditorId(lang);
+            if (_editorsInited.Contains(id)) continue;
             try
             {
-                _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/quill-interop.js");
-                await _module.InvokeAsync<bool>("init", _editorId, _model.Content ?? string.Empty);
+                await _module.InvokeAsync<bool>("init", id, LangModel(lang).Content ?? string.Empty);
+                _editorsInited.Add(id);
             }
-            catch
+            catch { /* editor not in DOM yet or CDN offline */ }
+        }
+    }
+
+    private void OnTitleInput(string lang, string? value)
+    {
+        var m = LangModel(lang);
+        m.Title = value ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(m.Slug))
+            m.Slug = SlugGenerator.Generate(m.Title);
+    }
+
+    private async Task PullEditorsAsync()
+    {
+        if (_module is null) return;
+        foreach (var lang in EditorLanguages())
+        {
+            try
             {
-                // Quill failed to load (e.g. offline CDN); editing falls back to other fields.
-                _module = null;
+                var html = await _module.InvokeAsync<string?>("getHtml", EditorId(lang));
+                if (html is not null) LangModel(lang).Content = html;
             }
+            catch { /* keep last-known */ }
         }
     }
 
-    private void OnTitleChanged()
+    private async Task<Post?> UpsertGroupAsync(string status)
     {
-        // Auto-fill slug from title only while slug is empty (don't clobber manual edits).
-        if (_model is not null && string.IsNullOrWhiteSpace(_model.Slug))
-            _model.Slug = SlugGenerator.Generate(_model.Title);
-    }
-
-    private void RegenerateSlug()
-    {
-        if (_model is not null)
-            _model.Slug = SlugGenerator.Generate(_model.Title);
-    }
-
-    private async Task PullEditorContentAsync()
-    {
-        if (_module is null || _model is null) return;
-        try
-        {
-            var html = await _module.InvokeAsync<string?>("getHtml", _editorId);
-            if (html is not null)
-                _model.Content = html;
-        }
-        catch
-        {
-            // ignore; keep last-known content
-        }
-    }
-
-    private async Task<Post?> UpsertAsync(string status)
-    {
-        if (_model is null) return null;
-
-        await PullEditorContentAsync();
+        await PullEditorsAsync();
         var userId = await CurrentUserIdAsync() ?? 0;
         var now = DateTime.UtcNow;
+        var isMulti = _siteLanguages.Count > 1;
+        if (isMulti && _groupId is null) _groupId = Guid.NewGuid();
 
-        if (IsNew)
+        var langs = EditorLanguages()
+            .Where(l => !string.IsNullOrWhiteSpace(LangModel(l).Title) || !string.IsNullOrWhiteSpace(LangModel(l).Content))
+            .ToList();
+        if (langs.Count == 0) langs.Add(_primaryLanguage);
+
+        var existing = new Dictionary<string, Post>(StringComparer.OrdinalIgnoreCase);
+        if (!IsNew)
         {
-            var post = new Post
-            {
-                SiteId = _model.SiteId,
-                Title = _model.Title.Trim(),
-                Slug = NormalizeSlug(_model.Slug),
-                Content = _model.Content ?? string.Empty,
-                Excerpt = NullIfBlank(_model.Excerpt),
-                Thumbnail = NullIfBlank(_model.Thumbnail),
-                CategoryId = NullIfBlank(_model.CategoryId),
-                AuthorId = NullIfBlank(_model.AuthorId),
-                SeoTitle = NullIfBlank(_model.SeoTitle),
-                SeoDescription = NullIfBlank(_model.SeoDescription),
-                Status = status,
-                IsAIGenerated = _aiGenerated,
-                AIPromptUsed = _aiPromptUsed,
-                AITokensUsed = _aiTokensUsed,
-                CreatedBy = userId,
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            Db.Posts.Add(post);
-            await Db.SaveChangesAsync();
-            Id = post.Id; // so subsequent operations target the saved row
-            return post;
+            var rows = isMulti && _groupId is Guid gid
+                ? await Db.Posts.Where(p => p.TranslationGroupId == gid && p.SiteId == _shared.SiteId).ToListAsync()
+                : await Db.Posts.Where(p => p.Id == Id).ToListAsync();
+            foreach (var r in rows) existing[r.Language] = r;
         }
-        else
+
+        Post? primary = null;
+        foreach (var lang in langs)
         {
-            var post = await Db.Posts.FirstOrDefaultAsync(p => p.Id == Id);
-            if (post is null)
+            var m = LangModel(lang);
+            if (!existing.TryGetValue(lang, out var post))
             {
-                Toast.ShowError("Không tìm thấy bài viết.");
-                return null;
+                post = new Post { SiteId = _shared.SiteId, CreatedBy = userId, CreatedAt = now };
+                Db.Posts.Add(post);
             }
-            // SiteId is fixed after creation (dropdown disabled); keep existing value.
-            post.Title = _model.Title.Trim();
-            post.Slug = NormalizeSlug(_model.Slug);
-            post.Content = _model.Content ?? string.Empty;
-            post.Excerpt = NullIfBlank(_model.Excerpt);
-            post.Thumbnail = NullIfBlank(_model.Thumbnail);
-            post.CategoryId = NullIfBlank(_model.CategoryId);
-            post.AuthorId = NullIfBlank(_model.AuthorId);
-            post.SeoTitle = NullIfBlank(_model.SeoTitle);
-            post.SeoDescription = NullIfBlank(_model.SeoDescription);
+            post.Title = (m.Title ?? string.Empty).Trim();
+            post.Slug = NormalizeSlug(m.Slug);
+            post.Content = m.Content ?? string.Empty;
+            post.Excerpt = NullIfBlank(m.Excerpt);
+            post.SeoTitle = NullIfBlank(m.SeoTitle);
+            post.SeoDescription = NullIfBlank(m.SeoDescription);
+            post.Thumbnail = NullIfBlank(_shared.Thumbnail);
+            post.CategoryId = NullIfBlank(_shared.CategoryId);
+            post.AuthorId = NullIfBlank(_shared.AuthorId);
+            post.Language = lang;
+            post.TranslationGroupId = isMulti ? _groupId : null;
             post.Status = status;
             post.UpdatedAt = now;
-            // Only stamp AI metadata when content was AI-generated in this session.
             if (_aiGenerated)
             {
                 post.IsAIGenerated = true;
                 post.AIPromptUsed = _aiPromptUsed;
                 post.AITokensUsed = _aiTokensUsed;
             }
-            await Db.SaveChangesAsync();
-            return post;
+            if (string.Equals(lang, _primaryLanguage, StringComparison.OrdinalIgnoreCase) || primary is null)
+                primary = post;
         }
+
+        await Db.SaveChangesAsync();
+        if (IsNew && primary is not null) Id = primary.Id;
+        return primary;
     }
 
     private async Task SaveDraft()
@@ -461,7 +548,7 @@ else
         _busy = true;
         try
         {
-            var post = await UpsertAsync(PostStatuses.Draft);
+            var post = await UpsertGroupAsync(PostStatuses.Draft);
             if (post is null) return;
             _currentStatus = post.Status;
             Toast.ShowSuccess("Đã lưu nháp.");
@@ -478,22 +565,18 @@ else
             Toast.ShowError("Vui lòng chọn thời điểm đăng.");
             return;
         }
-
         _busy = true;
         try
         {
-            var post = await UpsertAsync(PostStatuses.Scheduled);
+            var post = await UpsertGroupAsync(PostStatuses.Scheduled);
             if (post is null) return;
 
-            // Convert local picker value -> UTC for storage.
             var scheduledUtc = DateTime.SpecifyKind(_scheduleLocal.Value, DateTimeKind.Local).ToUniversalTime();
-            var tracked = await Db.Posts.FirstOrDefaultAsync(p => p.Id == post.Id);
-            if (tracked is not null)
-            {
-                tracked.ScheduledAt = scheduledUtc;
-                tracked.UpdatedAt = DateTime.UtcNow;
-                await Db.SaveChangesAsync();
-            }
+            var rows = post.TranslationGroupId is Guid gid
+                ? await Db.Posts.Where(p => p.TranslationGroupId == gid && p.SiteId == post.SiteId).ToListAsync()
+                : await Db.Posts.Where(p => p.Id == post.Id).ToListAsync();
+            foreach (var r in rows) { r.ScheduledAt = scheduledUtc; r.UpdatedAt = DateTime.UtcNow; }
+            await Db.SaveChangesAsync();
 
             _currentStatus = PostStatuses.Scheduled;
             Toast.ShowSuccess("Đã lưu lịch đăng. (Scheduler sẽ xử lý ở Phase 5.)");
@@ -508,8 +591,7 @@ else
         _busy = true;
         try
         {
-            // Save first (as draft) so the publisher reads persisted data, then publish.
-            var post = await UpsertAsync(PostStatuses.Draft);
+            var post = await UpsertGroupAsync(PostStatuses.Draft);
             if (post is null) return;
 
             var userId = await CurrentUserIdAsync() ?? 0;
@@ -531,26 +613,23 @@ else
 
     private async Task GenerateAi()
     {
-        if (_model is null) return;
-        if (string.IsNullOrWhiteSpace(_aiTopic))
-        {
-            _aiError = "Vui lòng nhập chủ đề.";
-            return;
-        }
+        if (_shared.SiteId <= 0) { _aiError = "Chọn site trước."; return; }
+        if (string.IsNullOrWhiteSpace(_aiTopic)) { _aiError = "Vui lòng nhập chủ đề."; return; }
 
         _aiBusy = true;
         _aiError = null;
         try
         {
             var keywords = SplitCsv(_aiKeywords);
-            var translateTo = SplitCsv(_aiTranslateTo);
+            var isMulti = _siteLanguages.Count > 1;
+            var translateTo = isMulti ? OtherLanguages().ToList() : SplitCsv(_aiTranslateTo);
 
             var tpl = _aiTemplateId > 0 ? _templates.FirstOrDefault(t => t.Id == _aiTemplateId) : null;
             string? system = null;
             string? user = null;
             if (tpl is not null)
             {
-                var siteName = _mappedSites.FirstOrDefault(s => s.Id == _model.SiteId)?.Name ?? string.Empty;
+                var siteName = _mappedSites.FirstOrDefault(s => s.Id == _shared.SiteId)?.Name ?? string.Empty;
                 var vars = new PromptVars(_aiTopic!.Trim(), keywords, _aiLength, _aiTone, siteName);
                 (system, user) = PromptTemplateRenderer.Render(tpl, vars);
             }
@@ -562,7 +641,7 @@ else
                 Keywords = keywords,
                 Length = _aiLength,
                 Tone = _aiTone,
-                Language = "vi",
+                Language = _primaryLanguage,
                 SystemPrompt = system,
                 UserPrompt = string.IsNullOrWhiteSpace(user) ? null : user,
                 TranslateTo = translateTo,
@@ -571,19 +650,16 @@ else
             var result = await AI.GenerateAsync(req);
             _lastResult = result;
 
-            // Fill form + editor with the original article.
-            _model.Title = result.Original.Title;
-            _model.Excerpt = NullIfBlank(result.Original.Excerpt);
-            _model.Content = result.Original.Content;
-            if (string.IsNullOrWhiteSpace(_model.Slug))
-                _model.Slug = SlugGenerator.Generate(_model.Title);
-            if (_module is not null)
+            await FillLanguageAsync(_primaryLanguage, result.Original.Title, result.Original.Content, result.Original.Excerpt);
+            if (isMulti)
             {
-                try { await _module.InvokeVoidAsync("setHtml", _editorId, result.Original.Content); }
-                catch { /* editor not ready; _model.Content still persists on save */ }
+                foreach (var tr in result.Translations)
+                {
+                    if (_siteLanguages.Contains(tr.Language, StringComparer.OrdinalIgnoreCase))
+                        await FillLanguageAsync(tr.Language, tr.Title, tr.Content, tr.Excerpt);
+                }
             }
 
-            // Stamp AI metadata for persistence.
             _aiGenerated = true;
             _aiPromptUsed = user ?? _aiTopic!.Trim();
             _aiTokensUsed = result.Usage.TotalTokens;
@@ -595,13 +671,23 @@ else
         finally { _aiBusy = false; }
     }
 
+    private async Task FillLanguageAsync(string lang, string title, string content, string? excerpt)
+    {
+        var m = LangModel(lang);
+        m.Title = title;
+        m.Excerpt = NullIfBlank(excerpt);
+        m.Content = content;
+        if (string.IsNullOrWhiteSpace(m.Slug)) m.Slug = SlugGenerator.Generate(title);
+        if (_module is not null && _editorsInited.Contains(EditorId(lang)))
+        {
+            try { await _module.InvokeVoidAsync("setHtml", EditorId(lang), content); }
+            catch { /* editor not ready; content persists on save */ }
+        }
+    }
+
     private async Task CreateTranslationDraft(AIArticle translation)
     {
-        if (_translationSite <= 0)
-        {
-            Toast.ShowError("Chọn site cho bản dịch.");
-            return;
-        }
+        if (_translationSite <= 0) { Toast.ShowError("Chọn site cho bản dịch."); return; }
 
         var userId = await CurrentUserIdAsync() ?? 0;
         var now = DateTime.UtcNow;
@@ -612,6 +698,7 @@ else
             Slug = NormalizeSlug(translation.Title),
             Content = translation.Content,
             Excerpt = NullIfBlank(translation.Excerpt),
+            Language = translation.Language,
             Status = PostStatuses.Draft,
             IsAIGenerated = true,
             AIPromptUsed = _aiPromptUsed,
@@ -630,17 +717,27 @@ else
             ? new List<string>()
             : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
+    private static List<string> ParseLanguages(string? json, string fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(json))
+        {
+            try
+            {
+                var list = JsonSerializer.Deserialize<List<string>>(json);
+                if (list is { Count: > 0 })
+                    return list.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).Distinct().ToList();
+            }
+            catch (JsonException) { /* fall through */ }
+        }
+        return new List<string> { string.IsNullOrWhiteSpace(fallback) ? "vi" : fallback };
+    }
+
     private bool ValidateBeforeSave()
     {
-        if (_model is null) return false;
-        if (_model.SiteId <= 0)
+        if (_shared.SiteId <= 0) { Toast.ShowError("Vui lòng chọn site."); return false; }
+        if (string.IsNullOrWhiteSpace(LangModel(_primaryLanguage).Title))
         {
-            Toast.ShowError("Vui lòng chọn site.");
-            return false;
-        }
-        if (string.IsNullOrWhiteSpace(_model.Title))
-        {
-            Toast.ShowError("Tiêu đề là bắt buộc.");
+            Toast.ShowError($"Tiêu đề ngôn ngữ chính ({_primaryLanguage}) là bắt buộc.");
             return false;
         }
         return true;
@@ -659,19 +756,26 @@ else
         return int.TryParse(raw, out var id) ? id : null;
     }
 
+    private async Task DisposeEditorsAsync()
+    {
+        if (_module is null) return;
+        foreach (var id in _editorsInited.ToList())
+        {
+            try { await _module.InvokeVoidAsync("dispose", id); }
+            catch { /* circuit may be down */ }
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_module is not null)
         {
             try
             {
-                await _module.InvokeVoidAsync("dispose", _editorId);
+                await DisposeEditorsAsync();
                 await _module.DisposeAsync();
             }
-            catch
-            {
-                // circuit may already be torn down
-            }
+            catch { /* circuit may already be torn down */ }
         }
     }
 
@@ -679,23 +783,26 @@ else
     {
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
+        public string DefaultLanguage { get; set; } = "vi";
+        public string? SupportedLanguagesJson { get; set; }
     }
 
-    public sealed class PostFormModel
+    private sealed class SharedModel
     {
         public int SiteId { get; set; }
-
-        [Required(ErrorMessage = "Tiêu đề là bắt buộc."), StringLength(500)]
-        public string Title { get; set; } = string.Empty;
-
-        public string? Slug { get; set; }
-        public string? Content { get; set; }
-        public string? Excerpt { get; set; }
         public string? Thumbnail { get; set; }
         public string? CategoryId { get; set; }
         public string? AuthorId { get; set; }
+        public string? RemotePostId { get; set; }
+    }
+
+    private sealed class LangContent
+    {
+        public string Title { get; set; } = string.Empty;
+        public string? Slug { get; set; }
+        public string? Content { get; set; }
+        public string? Excerpt { get; set; }
         public string? SeoTitle { get; set; }
         public string? SeoDescription { get; set; }
-        public string? RemotePostId { get; set; }
     }
 }
