@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Publisher.Core.Interfaces;
 using Publisher.Core.Options;
+using Publisher.Infrastructure.AI;
 using Publisher.Infrastructure.Auditing;
 using Publisher.Infrastructure.Data;
 using Publisher.Infrastructure.Publishing;
@@ -47,6 +49,27 @@ public static class DependencyInjection
 
         // Agent E: post publisher (writes posts into the target site DB via the INSERT builder).
         services.AddScoped<IPostPublisher, PostPublisher>();
+
+        // Phase 4: AI Gateway client. Env vars take precedence over config.
+        var aiUrl = Environment.GetEnvironmentVariable("PUBLISHER_AIGATEWAY_URL");
+        var aiKey = Environment.GetEnvironmentVariable("PUBLISHER_AIGATEWAY_KEY");
+        services.Configure<AIGatewayOptions>(opts =>
+        {
+            config.GetSection(AIGatewayOptions.SectionName).Bind(opts);
+            if (!string.IsNullOrWhiteSpace(aiUrl)) opts.BaseUrl = aiUrl;
+            if (!string.IsNullOrWhiteSpace(aiKey)) opts.ApiKey = aiKey;
+        });
+
+        services.AddHttpClient<IAIContentService, AIContentService>((sp, client) =>
+        {
+            var o = sp.GetRequiredService<IOptions<AIGatewayOptions>>().Value;
+            if (!string.IsNullOrWhiteSpace(o.BaseUrl))
+            {
+                var baseUrl = o.BaseUrl.EndsWith('/') ? o.BaseUrl : o.BaseUrl + "/";
+                client.BaseAddress = new Uri(baseUrl);
+            }
+            client.Timeout = TimeSpan.FromSeconds(o.TimeoutSeconds > 0 ? o.TimeoutSeconds : 120);
+        });
 
         return services;
     }

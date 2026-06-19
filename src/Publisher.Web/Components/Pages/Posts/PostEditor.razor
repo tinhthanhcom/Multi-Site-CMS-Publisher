@@ -8,10 +8,14 @@
 @inject IPostPublisher Publisher
 @inject IJSRuntime JS
 @inject AuthenticationStateProvider AuthState
+@inject IAIContentService AI
+@inject Microsoft.Extensions.Options.IOptions<Publisher.Core.Options.AIGatewayOptions> AIOptions
 @using Microsoft.EntityFrameworkCore
 @using System.ComponentModel.DataAnnotations
 @using Publisher.Core.Entities
 @using Publisher.Core.Enums
+@using Publisher.Core.Models
+@using Publisher.Infrastructure.AI
 @using Publisher.Web.Services
 
 <PageTitle>@(IsNew ? "Bài viết mới" : "Sửa bài viết")</PageTitle>
@@ -122,6 +126,90 @@ else
                     </div>
                 </div>
 
+                @if (_canEdit && _aiEnabled)
+                {
+                    <div class="card mb-3 border-info">
+                        <div class="card-header bg-info-subtle d-flex justify-content-between align-items-center">
+                            <span><span class="bi bi-robot" aria-hidden="true"></span> AI Viết</span>
+                            <button type="button" class="btn btn-sm btn-outline-info" @onclick="() => _aiOpen = !_aiOpen">
+                                @(_aiOpen ? "Ẩn" : "Mở")
+                            </button>
+                        </div>
+                        @if (_aiOpen)
+                        {
+                            <div class="card-body">
+                                <div class="mb-2">
+                                    <label class="form-label">Chủ đề <span class="text-danger">*</span></label>
+                                    <input class="form-control form-control-sm" @bind="_aiTopic" placeholder="VD: Lợi ích của cà phê" />
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label">Từ khóa (phẩy)</label>
+                                    <input class="form-control form-control-sm" @bind="_aiKeywords" placeholder="cà phê, sức khỏe" />
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label">Template</label>
+                                    <select class="form-select form-select-sm" @bind="_aiTemplateId">
+                                        <option value="0">-- Không dùng template --</option>
+                                        @foreach (var t in _templates)
+                                        {
+                                            <option value="@t.Id">@t.Name @(t.SiteId is null ? "(global)" : "")</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="row g-2 mb-2">
+                                    <div class="col-7">
+                                        <label class="form-label">Giọng văn</label>
+                                        <input class="form-control form-control-sm" @bind="_aiTone" />
+                                    </div>
+                                    <div class="col-5">
+                                        <label class="form-label">Độ dài</label>
+                                        <input type="number" class="form-control form-control-sm" @bind="_aiLength" />
+                                    </div>
+                                </div>
+                                <div class="mb-2">
+                                    <label class="form-label">Dịch sang (mã ngôn ngữ, phẩy)</label>
+                                    <input class="form-control form-control-sm" @bind="_aiTranslateTo" placeholder="en, ja" />
+                                </div>
+                                <button type="button" class="btn btn-info w-100" disabled="@_aiBusy" @onclick="GenerateAi">
+                                    @(_aiBusy ? "Đang sinh nội dung..." : "Sinh nội dung")
+                                </button>
+
+                                @if (_aiError is not null)
+                                {
+                                    <div class="alert alert-danger mt-2 mb-0 py-2 small">@_aiError</div>
+                                }
+                                @if (_lastResult is not null)
+                                {
+                                    <div class="mt-2 small text-muted">
+                                        Nguồn: <strong>@_lastResult.Provider</strong> · @_lastResult.Usage.TotalTokens tokens · @_lastResult.DurationMs ms
+                                    </div>
+                                    @if (_lastResult.Translations.Count > 0)
+                                    {
+                                        <hr class="my-2" />
+                                        <div class="fw-semibold small mb-1">Bản dịch — tạo nháp:</div>
+                                        @foreach (var tr in _lastResult.Translations)
+                                        {
+                                            <div class="d-flex gap-1 align-items-center mb-1">
+                                                <span class="badge bg-secondary">@tr.Language</span>
+                                                <span class="text-truncate small flex-grow-1" title="@tr.Title">@tr.Title</span>
+                                                <select class="form-select form-select-sm" style="width:auto" @bind="_translationSite">
+                                                    <option value="0">site...</option>
+                                                    @foreach (var s in _mappedSites)
+                                                    {
+                                                        <option value="@s.Id">@s.Name</option>
+                                                    }
+                                                </select>
+                                                <button type="button" class="btn btn-sm btn-outline-success"
+                                                        @onclick="() => CreateTranslationDraft(tr)">Tạo</button>
+                                            </div>
+                                        }
+                                    }
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+
                 @if (_canEdit)
                 {
                     <div class="card mb-3">
@@ -173,6 +261,25 @@ else
 
     private DateTime? _scheduleLocal;
 
+    // --- AI panel state ---
+    private bool _aiEnabled;
+    private bool _aiOpen;
+    private bool _aiBusy;
+    private string? _aiError;
+    private string? _aiTopic;
+    private string? _aiKeywords;
+    private int _aiTemplateId;
+    private string _aiTone = "seo-friendly";
+    private int _aiLength = 800;
+    private string? _aiTranslateTo;
+    private int _translationSite;
+    private List<AIPromptTemplate> _templates = new();
+    private AIGenerateResult? _lastResult;
+    // Persisted to the Post on save.
+    private bool _aiGenerated;
+    private string? _aiPromptUsed;
+    private int? _aiTokensUsed;
+
     private bool IsNew => Id is null;
 
     protected override async Task OnParametersSetAsync()
@@ -185,6 +292,16 @@ else
             .Select(s => new SiteOption { Id = s.Id, Name = s.Name })
             .ToListAsync();
         _noMappedSites = _mappedSites.Count == 0;
+
+        // AI panel availability + active prompt templates (global + per-site).
+        _aiEnabled = AIOptions.Value.IsConfigured;
+        if (_aiEnabled)
+        {
+            _templates = await Db.AIPromptTemplates.AsNoTracking()
+                .Where(t => t.IsActive)
+                .OrderBy(t => t.SiteId == null ? 0 : 1).ThenBy(t => t.Name)
+                .ToListAsync();
+        }
 
         if (IsNew)
         {
@@ -294,6 +411,9 @@ else
                 SeoTitle = NullIfBlank(_model.SeoTitle),
                 SeoDescription = NullIfBlank(_model.SeoDescription),
                 Status = status,
+                IsAIGenerated = _aiGenerated,
+                AIPromptUsed = _aiPromptUsed,
+                AITokensUsed = _aiTokensUsed,
                 CreatedBy = userId,
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -323,6 +443,13 @@ else
             post.SeoDescription = NullIfBlank(_model.SeoDescription);
             post.Status = status;
             post.UpdatedAt = now;
+            // Only stamp AI metadata when content was AI-generated in this session.
+            if (_aiGenerated)
+            {
+                post.IsAIGenerated = true;
+                post.AIPromptUsed = _aiPromptUsed;
+                post.AITokensUsed = _aiTokensUsed;
+            }
             await Db.SaveChangesAsync();
             return post;
         }
@@ -401,6 +528,107 @@ else
         }
         finally { _busy = false; }
     }
+
+    private async Task GenerateAi()
+    {
+        if (_model is null) return;
+        if (string.IsNullOrWhiteSpace(_aiTopic))
+        {
+            _aiError = "Vui lòng nhập chủ đề.";
+            return;
+        }
+
+        _aiBusy = true;
+        _aiError = null;
+        try
+        {
+            var keywords = SplitCsv(_aiKeywords);
+            var translateTo = SplitCsv(_aiTranslateTo);
+
+            var tpl = _aiTemplateId > 0 ? _templates.FirstOrDefault(t => t.Id == _aiTemplateId) : null;
+            string? system = null;
+            string? user = null;
+            if (tpl is not null)
+            {
+                var siteName = _mappedSites.FirstOrDefault(s => s.Id == _model.SiteId)?.Name ?? string.Empty;
+                var vars = new PromptVars(_aiTopic!.Trim(), keywords, _aiLength, _aiTone, siteName);
+                (system, user) = PromptTemplateRenderer.Render(tpl, vars);
+            }
+
+            var req = new AIGenerateRequest
+            {
+                ContentType = tpl?.ContentType ?? "article",
+                Topic = _aiTopic!.Trim(),
+                Keywords = keywords,
+                Length = _aiLength,
+                Tone = _aiTone,
+                Language = "vi",
+                SystemPrompt = system,
+                UserPrompt = string.IsNullOrWhiteSpace(user) ? null : user,
+                TranslateTo = translateTo,
+            };
+
+            var result = await AI.GenerateAsync(req);
+            _lastResult = result;
+
+            // Fill form + editor with the original article.
+            _model.Title = result.Original.Title;
+            _model.Excerpt = NullIfBlank(result.Original.Excerpt);
+            _model.Content = result.Original.Content;
+            if (string.IsNullOrWhiteSpace(_model.Slug))
+                _model.Slug = SlugGenerator.Generate(_model.Title);
+            if (_module is not null)
+            {
+                try { await _module.InvokeVoidAsync("setHtml", _editorId, result.Original.Content); }
+                catch { /* editor not ready; _model.Content still persists on save */ }
+            }
+
+            // Stamp AI metadata for persistence.
+            _aiGenerated = true;
+            _aiPromptUsed = user ?? _aiTopic!.Trim();
+            _aiTokensUsed = result.Usage.TotalTokens;
+
+            Toast.ShowSuccess($"AI đã sinh nội dung (nguồn: {result.Provider}).");
+        }
+        catch (AIGatewayException ex) { _aiError = ex.Message; }
+        catch (Exception ex) { _aiError = "Lỗi không xác định: " + ex.Message; }
+        finally { _aiBusy = false; }
+    }
+
+    private async Task CreateTranslationDraft(AIArticle translation)
+    {
+        if (_translationSite <= 0)
+        {
+            Toast.ShowError("Chọn site cho bản dịch.");
+            return;
+        }
+
+        var userId = await CurrentUserIdAsync() ?? 0;
+        var now = DateTime.UtcNow;
+        var post = new Post
+        {
+            SiteId = _translationSite,
+            Title = translation.Title,
+            Slug = NormalizeSlug(translation.Title),
+            Content = translation.Content,
+            Excerpt = NullIfBlank(translation.Excerpt),
+            Status = PostStatuses.Draft,
+            IsAIGenerated = true,
+            AIPromptUsed = _aiPromptUsed,
+            AITokensUsed = _aiTokensUsed,
+            CreatedBy = userId,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        Db.Posts.Add(post);
+        await Db.SaveChangesAsync();
+        Toast.ShowSuccess($"Đã tạo nháp bản dịch [{translation.Language}].");
+    }
+
+    private static List<string> SplitCsv(string? csv)
+        => string.IsNullOrWhiteSpace(csv)
+            ? new List<string>()
+            : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     private bool ValidateBeforeSave()
     {

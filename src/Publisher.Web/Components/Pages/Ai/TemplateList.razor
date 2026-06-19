@@ -1,0 +1,113 @@
+@page "/ai/templates"
+@attribute [Authorize(Roles = "Admin")]
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject IAuditLogService Audit
+@inject AuthenticationStateProvider AuthState
+@using Microsoft.EntityFrameworkCore
+
+<PageTitle>Prompt Templates</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Prompt Templates</h1>
+    <a class="btn btn-primary" href="/ai/templates/new">+ Thêm template</a>
+</div>
+
+@if (_templates is null)
+{
+    <p>Đang tải...</p>
+}
+else if (_templates.Count == 0)
+{
+    <div class="alert alert-info">Chưa có template nào. Nhấn "Thêm template" để tạo.</div>
+}
+else
+{
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Tên</th>
+                        <th>Loại</th>
+                        <th>Phạm vi</th>
+                        <th>Mặc định</th>
+                        <th>Kích hoạt</th>
+                        <th class="text-end">Thao tác</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var t in _templates)
+                    {
+                        <tr>
+                            <td>@t.Name</td>
+                            <td><span class="badge bg-secondary">@t.ContentType</span></td>
+                            <td>
+                                @if (t.SiteId is null)
+                                {
+                                    <span class="badge bg-info text-dark">Global</span>
+                                }
+                                else
+                                {
+                                    <span>@(_siteNames.GetValueOrDefault(t.SiteId.Value, $"Site #{t.SiteId}"))</span>
+                                }
+                            </td>
+                            <td>@t.DefaultLength từ · @t.DefaultTone</td>
+                            <td>
+                                @if (t.IsActive)
+                                {
+                                    <span class="badge bg-success">Có</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-danger">Không</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                <a class="btn btn-sm btn-outline-primary" href="@($"/ai/templates/{t.Id}/edit")">Sửa</a>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => Delete(t)">Xóa</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private List<AIPromptTemplate>? _templates;
+    private Dictionary<int, string> _siteNames = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _templates = await Db.AIPromptTemplates.AsNoTracking()
+            .OrderBy(t => t.SiteId == null ? 0 : 1).ThenBy(t => t.Name)
+            .ToListAsync();
+        _siteNames = await Db.Sites.AsNoTracking().ToDictionaryAsync(s => s.Id, s => s.Name);
+    }
+
+    private async Task Delete(AIPromptTemplate t)
+    {
+        var entity = await Db.AIPromptTemplates.FirstOrDefaultAsync(x => x.Id == t.Id);
+        if (entity is null) return;
+
+        Db.AIPromptTemplates.Remove(entity);
+        await Db.SaveChangesAsync();
+
+        await Audit.WriteAsync("AI_TEMPLATE_DELETED", userId: await CurrentUserIdAsync(),
+            entityType: "AIPromptTemplate", entityId: t.Id.ToString(), details: t.Name);
+
+        _templates?.Remove(t);
+        Toast.ShowSuccess("Đã xóa template.");
+        StateHasChanged();
+    }
+
+    private async Task<int?> CurrentUserIdAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var raw = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(raw, out var id) ? id : null;
+    }
+}

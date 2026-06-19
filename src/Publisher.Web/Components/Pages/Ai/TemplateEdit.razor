@@ -1,0 +1,334 @@
+@page "/ai/templates/new"
+@page "/ai/templates/{Id:int}/edit"
+@attribute [Authorize(Roles = "Admin")]
+@inject AppDbContext Db
+@inject NavigationManager Nav
+@inject ToastService Toast
+@inject IAuditLogService Audit
+@inject IAIContentService AI
+@inject AuthenticationStateProvider AuthState
+@using Microsoft.EntityFrameworkCore
+@using System.ComponentModel.DataAnnotations
+@using Publisher.Core.Models
+@using Publisher.Infrastructure.AI
+
+<PageTitle>@(IsNew ? "Thêm template" : "Sửa template")</PageTitle>
+
+<h1 class="h3 mb-3">@(IsNew ? "Thêm prompt template" : "Sửa prompt template")</h1>
+
+@if (_loadError is not null)
+{
+    <div class="alert alert-danger">@_loadError</div>
+    <a class="btn btn-outline-secondary" href="/ai/templates">Quay lại</a>
+}
+else if (_model is null)
+{
+    <p>Đang tải...</p>
+}
+else
+{
+    <div class="row">
+        <div class="col-lg-7">
+            <EditForm Model="_model" OnValidSubmit="Save" class="card mb-3">
+                <DataAnnotationsValidator />
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label class="form-label">Tên <span class="text-danger">*</span></label>
+                        <InputText class="form-control" @bind-Value="_model.Name" />
+                        <ValidationMessage For="() => _model.Name" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Mô tả</label>
+                        <InputText class="form-control" @bind-Value="_model.Description" />
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Loại nội dung</label>
+                            <InputSelect class="form-select" @bind-Value="_model.ContentType">
+                                @foreach (var ct in ContentTypes)
+                                {
+                                    <option value="@ct">@ct</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Phạm vi</label>
+                            <InputSelect class="form-select" @bind-Value="_model.SiteId">
+                                <option value="">Global (mọi site)</option>
+                                @foreach (var s in _sites)
+                                {
+                                    <option value="@s.Id">@s.Name</option>
+                                }
+                            </InputSelect>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">System Prompt</label>
+                        <InputTextArea class="form-control" rows="3" @bind-Value="_model.SystemPrompt" />
+                        <div class="form-text">Vai trò/định hướng cho AI (tùy chọn).</div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">User Prompt Template <span class="text-danger">*</span></label>
+                        <InputTextArea class="form-control" rows="5" @bind-Value="_model.UserPromptTpl" />
+                        <ValidationMessage For="() => _model.UserPromptTpl" />
+                        <div class="form-text">
+                            Biến: <code>{topic}</code> <code>{keywords}</code> <code>{length}</code> <code>{tone}</code> <code>{site_name}</code>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label">Độ dài mặc định</label>
+                            <InputNumber class="form-control" @bind-Value="_model.DefaultLength" />
+                        </div>
+                        <div class="col-md-5 mb-3">
+                            <label class="form-label">Giọng văn mặc định</label>
+                            <InputText class="form-control" @bind-Value="_model.DefaultTone" />
+                        </div>
+                        <div class="col-md-3 mb-3 d-flex align-items-end">
+                            <div class="form-check">
+                                <InputCheckbox class="form-check-input" id="isActive" @bind-Value="_model.IsActive" />
+                                <label class="form-check-label" for="isActive">Kích hoạt</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-footer d-flex gap-2">
+                    <button type="submit" class="btn btn-primary" disabled="@_saving">Lưu</button>
+                    <a class="btn btn-outline-secondary" href="/ai/templates">Hủy</a>
+                </div>
+            </EditForm>
+        </div>
+
+        <div class="col-lg-5">
+            <div class="card mb-3">
+                <div class="card-header">Test prompt</div>
+                <div class="card-body">
+                    <div class="mb-2">
+                        <label class="form-label">Chủ đề</label>
+                        <input class="form-control" @bind="_testTopic" placeholder="VD: Lợi ích của cà phê" />
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Từ khóa (phẩy)</label>
+                        <input class="form-control" @bind="_testKeywords" placeholder="cà phê, sức khỏe" />
+                    </div>
+                    <button class="btn btn-outline-info w-100" @onclick="TestPrompt" disabled="@_testing">
+                        @(_testing ? "Đang gọi AI..." : "Chạy thử")
+                    </button>
+
+                    @if (_testResult is not null)
+                    {
+                        <hr />
+                        <div class="small text-muted mb-1">
+                            provider: <strong>@_testResult.Provider</strong> · tokens: @_testResult.Usage.TotalTokens · @_testResult.DurationMs ms
+                        </div>
+                        <h6>@_testResult.Original.Title</h6>
+                        <p class="text-muted small">@_testResult.Original.Excerpt</p>
+                        <div class="border rounded p-2 bg-light" style="max-height: 240px; overflow:auto;">
+                            @((MarkupString)_testResult.Original.Content)
+                        </div>
+                    }
+                    @if (_testError is not null)
+                    {
+                        <div class="alert alert-danger mt-2 mb-0">@_testError</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+
+    private static readonly string[] ContentTypes = { "article", "product", "news", "social" };
+
+    private TemplateFormModel? _model;
+    private string? _loadError;
+    private bool _saving;
+    private List<SiteOption> _sites = new();
+
+    // Test panel state
+    private string? _testTopic;
+    private string? _testKeywords;
+    private bool _testing;
+    private AIGenerateResult? _testResult;
+    private string? _testError;
+
+    private bool IsNew => Id is null;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _sites = await Db.Sites.AsNoTracking()
+            .OrderBy(s => s.Name)
+            .Select(s => new SiteOption { Id = s.Id, Name = s.Name })
+            .ToListAsync();
+
+        if (IsNew)
+        {
+            _model = new TemplateFormModel();
+            return;
+        }
+
+        var tpl = await Db.AIPromptTemplates.AsNoTracking().FirstOrDefaultAsync(t => t.Id == Id);
+        if (tpl is null)
+        {
+            _loadError = "Không tìm thấy template.";
+            return;
+        }
+
+        _model = new TemplateFormModel
+        {
+            Name = tpl.Name,
+            Description = tpl.Description,
+            ContentType = tpl.ContentType,
+            SiteId = tpl.SiteId,
+            SystemPrompt = tpl.SystemPrompt,
+            UserPromptTpl = tpl.UserPromptTpl,
+            DefaultLength = tpl.DefaultLength,
+            DefaultTone = tpl.DefaultTone,
+            IsActive = tpl.IsActive,
+        };
+    }
+
+    private async Task Save()
+    {
+        if (_model is null) return;
+        _saving = true;
+        try
+        {
+            var userId = await CurrentUserIdAsync() ?? 0;
+            var now = DateTime.UtcNow;
+
+            if (IsNew)
+            {
+                var tpl = new AIPromptTemplate
+                {
+                    Name = _model.Name.Trim(),
+                    Description = NullIfBlank(_model.Description),
+                    ContentType = _model.ContentType,
+                    SiteId = _model.SiteId,
+                    SystemPrompt = NullIfBlank(_model.SystemPrompt),
+                    UserPromptTpl = _model.UserPromptTpl.Trim(),
+                    DefaultLength = _model.DefaultLength,
+                    DefaultTone = _model.DefaultTone.Trim(),
+                    IsActive = _model.IsActive,
+                    CreatedBy = userId,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+                Db.AIPromptTemplates.Add(tpl);
+                await Db.SaveChangesAsync();
+                await Audit.WriteAsync("AI_TEMPLATE_CREATED", userId: userId,
+                    entityType: "AIPromptTemplate", entityId: tpl.Id.ToString(), details: tpl.Name);
+                Toast.ShowSuccess("Đã tạo template.");
+            }
+            else
+            {
+                var tpl = await Db.AIPromptTemplates.FirstOrDefaultAsync(t => t.Id == Id);
+                if (tpl is null) { Toast.ShowError("Không tìm thấy template."); return; }
+
+                tpl.Name = _model.Name.Trim();
+                tpl.Description = NullIfBlank(_model.Description);
+                tpl.ContentType = _model.ContentType;
+                tpl.SiteId = _model.SiteId;
+                tpl.SystemPrompt = NullIfBlank(_model.SystemPrompt);
+                tpl.UserPromptTpl = _model.UserPromptTpl.Trim();
+                tpl.DefaultLength = _model.DefaultLength;
+                tpl.DefaultTone = _model.DefaultTone.Trim();
+                tpl.IsActive = _model.IsActive;
+                tpl.UpdatedAt = now;
+                await Db.SaveChangesAsync();
+                await Audit.WriteAsync("AI_TEMPLATE_UPDATED", userId: userId,
+                    entityType: "AIPromptTemplate", entityId: tpl.Id.ToString(), details: tpl.Name);
+                Toast.ShowSuccess("Đã cập nhật template.");
+            }
+
+            Nav.NavigateTo("/ai/templates");
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task TestPrompt()
+    {
+        if (_model is null) return;
+        if (string.IsNullOrWhiteSpace(_testTopic))
+        {
+            _testError = "Nhập chủ đề để chạy thử.";
+            return;
+        }
+
+        _testing = true;
+        _testError = null;
+        _testResult = null;
+        try
+        {
+            var keywords = SplitCsv(_testKeywords);
+            var siteName = _model.SiteId is int sid ? _sites.FirstOrDefault(s => s.Id == sid)?.Name ?? "" : "";
+            var vars = new PromptVars(_testTopic!.Trim(), keywords, _model.DefaultLength, _model.DefaultTone, siteName);
+
+            var system = PromptTemplateRenderer.Substitute(_model.SystemPrompt, vars);
+            var user = PromptTemplateRenderer.Substitute(_model.UserPromptTpl, vars) ?? string.Empty;
+
+            var req = new AIGenerateRequest
+            {
+                ContentType = _model.ContentType,
+                Topic = _testTopic!.Trim(),
+                Keywords = keywords,
+                Length = _model.DefaultLength,
+                Tone = _model.DefaultTone,
+                Language = "vi",
+                SystemPrompt = system,
+                UserPrompt = string.IsNullOrWhiteSpace(user) ? null : user,
+            };
+            _testResult = await AI.GenerateAsync(req);
+        }
+        catch (AIGatewayException ex)
+        {
+            _testError = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            _testError = "Lỗi không xác định: " + ex.Message;
+        }
+        finally { _testing = false; }
+    }
+
+    private static List<string> SplitCsv(string? csv)
+        => string.IsNullOrWhiteSpace(csv)
+            ? new List<string>()
+            : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    private static string? NullIfBlank(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+
+    private async Task<int?> CurrentUserIdAsync()
+    {
+        var state = await AuthState.GetAuthenticationStateAsync();
+        var raw = state.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return int.TryParse(raw, out var id) ? id : null;
+    }
+
+    private sealed class SiteOption
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+    }
+
+    public sealed class TemplateFormModel
+    {
+        [Required(ErrorMessage = "Tên là bắt buộc."), StringLength(200)]
+        public string Name { get; set; } = string.Empty;
+
+        public string? Description { get; set; }
+        public string ContentType { get; set; } = "article";
+        public int? SiteId { get; set; }
+        public string? SystemPrompt { get; set; }
+
+        [Required(ErrorMessage = "User prompt template là bắt buộc.")]
+        public string UserPromptTpl { get; set; } = string.Empty;
+
+        [Range(50, 20000)]
+        public int DefaultLength { get; set; } = 800;
+        public string DefaultTone { get; set; } = "seo-friendly";
+        public bool IsActive { get; set; } = true;
+    }
+}
