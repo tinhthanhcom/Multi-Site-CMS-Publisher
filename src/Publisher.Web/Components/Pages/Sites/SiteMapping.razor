@@ -111,6 +111,45 @@ else
         </div>
     </div>
 
+    @if (IsMultiLang)
+    {
+        <div class="card mb-3 border-info">
+            <div class="card-header bg-info-subtle">Cột theo ngôn ngữ (site đa ngôn ngữ)</div>
+            <div class="card-body">
+                <p class="small text-muted mb-2">
+                    Site hỗ trợ <strong>@string.Join(", ", _siteLanguages)</strong>. Mỗi field bản địa hoá ghi vào cột
+                    riêng theo ngôn ngữ (vd <code>title_vi</code>, <code>title_en</code>). Để trống = không ghi ngôn ngữ đó.
+                    Khi đã cấu hình, các cột Title/Content/Excerpt/Slug/SEO ở trên sẽ bị thay bằng cột theo ngôn ngữ khi đăng bài.
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                        <thead>
+                            <tr>
+                                <th style="min-width: 8rem;">Field</th>
+                                @foreach (var lang in _siteLanguages)
+                                {
+                                    <th>@lang</th>
+                                }
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var field in LocalizedFields)
+                            {
+                                <tr>
+                                    <td class="fw-semibold">@field</td>
+                                    @foreach (var lang in _siteLanguages)
+                                    {
+                                        <td>@RenderLocalizedCell(field, lang)</td>
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+
     <div class="card mb-3">
         <div class="card-header">Giá trị mặc định</div>
         <div class="card-body row">
@@ -226,6 +265,14 @@ else
     private bool _validating;
     private bool _saving;
 
+    // Multi-language (per-language columns)
+    private static readonly string[] LocalizedFields = { "Title", "Content", "Excerpt", "Slug", "SeoTitle", "SeoDescription" };
+    private List<string> _siteLanguages = new();
+    private string _primaryLanguage = "vi";
+    // field -> language -> column name
+    private readonly Dictionary<string, Dictionary<string, string>> _localized = new(StringComparer.OrdinalIgnoreCase);
+    private bool IsMultiLang => _siteLanguages.Count > 1;
+
     protected override async Task OnParametersSetAsync()
     {
         var site = await Db.Sites.AsNoTracking().FirstOrDefaultAsync(s => s.Id == Id);
@@ -235,6 +282,8 @@ else
             return;
         }
         _siteName = site.Name;
+        _siteLanguages = ParseLanguages(site.SupportedLanguagesJson, site.DefaultLanguage);
+        _primaryLanguage = string.IsNullOrWhiteSpace(site.DefaultLanguage) ? _siteLanguages.FirstOrDefault() ?? "vi" : site.DefaultLanguage;
 
         var existing = await Db.SiteFieldMappings.AsNoTracking().FirstOrDefaultAsync(m => m.SiteId == Id);
         if (existing is not null)
@@ -260,15 +309,105 @@ else
                 FieldSeoDescription = existing.FieldSeoDescription,
                 DefaultAuthorId = existing.DefaultAuthorId,
                 DefaultCategoryId = existing.DefaultCategoryId,
-                CustomFieldsJson = existing.CustomFieldsJson
+                CustomFieldsJson = existing.CustomFieldsJson,
+                LocalizedColumnsJson = existing.LocalizedColumnsJson
             };
             _selectedTableKey = TableKey(existing.SchemaName, existing.TableName);
             _customFields = ParseCustomFields(existing.CustomFieldsJson);
+            LoadLocalized(existing.LocalizedColumnsJson);
         }
         else
         {
             _model = new FieldMappingInput { SchemaName = "dbo" };
+            LoadLocalized(null);
         }
+    }
+
+    private static List<string> ParseLanguages(string? json, string fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(json))
+        {
+            try
+            {
+                var list = JsonSerializer.Deserialize<List<string>>(json);
+                if (list is { Count: > 0 })
+                    return list.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).Distinct().ToList();
+            }
+            catch (JsonException) { /* fall through */ }
+        }
+        return new List<string> { string.IsNullOrWhiteSpace(fallback) ? "vi" : fallback };
+    }
+
+    /// <summary>Seeds the field×language grid from saved JSON, ensuring every cell key exists.</summary>
+    private void LoadLocalized(string? json)
+    {
+        _localized.Clear();
+        var saved = InsertCommandBuilder.ParseLocalizedColumns(json);
+        foreach (var field in LocalizedFields)
+        {
+            var inner = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            saved.TryGetValue(field, out var savedInner);
+            foreach (var lang in _siteLanguages)
+                inner[lang] = savedInner is not null && savedInner.TryGetValue(lang, out var col) ? col : string.Empty;
+            _localized[field] = inner;
+        }
+    }
+
+    /// <summary>Serializes the grid to JSON (only non-blank cells), or null when nothing is mapped.</summary>
+    private string? BuildLocalizedJson()
+    {
+        if (!IsMultiLang) return null;
+        var result = new Dictionary<string, Dictionary<string, string>>();
+        foreach (var field in LocalizedFields)
+        {
+            if (!_localized.TryGetValue(field, out var inner)) continue;
+            var cleaned = inner
+                .Where(kv => !string.IsNullOrWhiteSpace(kv.Value))
+                .ToDictionary(kv => kv.Key, kv => kv.Value.Trim());
+            if (cleaned.Count > 0) result[field] = cleaned;
+        }
+        return result.Count == 0 ? null : JsonSerializer.Serialize(result);
+    }
+
+    private RenderFragment RenderLocalizedCell(string field, string lang) => builder =>
+    {
+        var current = _localized.TryGetValue(field, out var inner) && inner.TryGetValue(lang, out var col) ? col : string.Empty;
+        var seq = 0;
+        if (_columns.Count > 0)
+        {
+            builder.OpenElement(seq++, "select");
+            builder.AddAttribute(seq++, "class", "form-select form-select-sm");
+            builder.AddAttribute(seq++, "value", current);
+            builder.AddAttribute(seq++, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => SetLocalized(field, lang, e.Value?.ToString())));
+            builder.AddMarkupContent(seq++, "<option value=\"\">(không)</option>");
+            foreach (var c in _columns)
+            {
+                builder.OpenElement(seq++, "option");
+                builder.AddAttribute(seq++, "value", c.Name);
+                builder.AddContent(seq++, c.Name);
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+        }
+        else
+        {
+            builder.OpenElement(seq++, "input");
+            builder.AddAttribute(seq++, "class", "form-control form-control-sm");
+            builder.AddAttribute(seq++, "value", current);
+            builder.AddAttribute(seq++, "placeholder", $"{field.ToLowerInvariant()}_{lang}");
+            builder.AddAttribute(seq++, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, e => SetLocalized(field, lang, e.Value?.ToString())));
+            builder.CloseElement();
+        }
+    };
+
+    private void SetLocalized(string field, string lang, string? value)
+    {
+        if (!_localized.TryGetValue(field, out var inner))
+        {
+            inner = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            _localized[field] = inner;
+        }
+        inner[lang] = value ?? string.Empty;
     }
 
     private static string TableKey(string schema, string name) => $"{schema}.{name}";
@@ -400,6 +539,7 @@ else
             .Where(c => !string.IsNullOrWhiteSpace(c.FieldName))
             .ToList();
         _model.CustomFieldsJson = clean.Count == 0 ? null : JsonSerializer.Serialize(clean);
+        _model.LocalizedColumnsJson = BuildLocalizedJson();
         // Normalize optional empties to null so the builder skips them.
         return _model;
     }
@@ -412,8 +552,18 @@ else
 
         try
         {
-            var built = Builder.Build(input, SamplePost(), published: false, publishTimeUtc: DateTime.UtcNow);
-            _preview = built.ToPreview();
+            InsertPreview preview;
+            if (IsMultiLang && !string.IsNullOrWhiteSpace(input.LocalizedColumnsJson))
+            {
+                // One sample post per language so each language's columns appear.
+                var samples = _siteLanguages.Select(l => { var p = SamplePost(); p.Language = l; return p; }).ToList();
+                preview = Builder.BuildLocalized(input, samples, _primaryLanguage, published: false, DateTime.UtcNow).ToPreview();
+            }
+            else
+            {
+                preview = Builder.Build(input, SamplePost(), published: false, publishTimeUtc: DateTime.UtcNow).ToPreview();
+            }
+            _preview = preview;
             Toast.ShowInfo("Đã tạo preview INSERT.");
         }
         catch (Exception ex)
@@ -501,6 +651,7 @@ else
             entity.DefaultAuthorId = NullIfBlank(input.DefaultAuthorId);
             entity.DefaultCategoryId = NullIfBlank(input.DefaultCategoryId);
             entity.CustomFieldsJson = input.CustomFieldsJson;
+            entity.LocalizedColumnsJson = input.LocalizedColumnsJson;
             entity.UpdatedAt = now;
 
             await Db.SaveChangesAsync();

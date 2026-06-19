@@ -10,6 +10,7 @@
 @inject AuthenticationStateProvider AuthState
 @using Microsoft.EntityFrameworkCore
 @using System.ComponentModel.DataAnnotations
+@using System.Text.Json
 @using Publisher.Core.Models
 
 <PageTitle>@(IsNew ? "Thêm site" : "Sửa site")</PageTitle>
@@ -52,9 +53,34 @@ else
                         <option value="MySQL">MySQL (chưa hỗ trợ)</option>
                     </InputSelect>
                 </div>
-                <div class="col-md-6 mb-3">
-                    <label class="form-label">Ngôn ngữ mặc định</label>
-                    <InputText class="form-control" @bind-Value="_model.DefaultLanguage" />
+            </div>
+
+            <div class="mb-3">
+                <label class="form-label">Ngôn ngữ hỗ trợ <span class="text-danger">*</span></label>
+                <div class="d-flex flex-wrap gap-3">
+                    @foreach (var (lc, name) in LanguageOptions())
+                    {
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="lang_@lc"
+                                   checked="@_model.Languages.Contains(lc)"
+                                   @onchange="e => ToggleLanguage(lc, (bool)(e.Value ?? false))" />
+                            <label class="form-check-label" for="lang_@lc">@name <span class="text-muted">(@lc)</span></label>
+                        </div>
+                    }
+                </div>
+                <div class="input-group input-group-sm mt-2" style="max-width: 22rem;">
+                    <input class="form-control" placeholder="Thêm mã ngôn ngữ khác (vd: id, ru)" @bind="_customLang" />
+                    <button type="button" class="btn btn-outline-secondary" @onclick="AddCustomLanguage">Thêm</button>
+                </div>
+                <div class="mt-2" style="max-width: 16rem;">
+                    <label class="form-label mb-1">Ngôn ngữ chính</label>
+                    <select class="form-select form-select-sm" @bind="_model.DefaultLanguage">
+                        @foreach (var lc in _model.Languages)
+                        {
+                            <option value="@lc">@lc</option>
+                        }
+                    </select>
+                    <div class="form-text">Bài viết mặc định + field chung lấy theo ngôn ngữ chính.</div>
                 </div>
             </div>
 
@@ -127,14 +153,70 @@ else
     private bool _testing;
     private bool _hasExistingConnString;
     private ConnectionTestResult? _lastTest;
+    private string? _customLang;
+
+    private static readonly (string Code, string Name)[] CommonLanguages =
+    {
+        ("vi", "Tiếng Việt"), ("en", "English"), ("ja", "日本語"), ("ko", "한국어"),
+        ("zh", "中文"), ("fr", "Français"), ("de", "Deutsch"), ("es", "Español"), ("th", "ไทย"),
+    };
 
     private bool IsNew => Id is null;
+
+    private IEnumerable<(string Code, string Name)> LanguageOptions()
+    {
+        var names = CommonLanguages.ToDictionary(x => x.Code, x => x.Name, StringComparer.OrdinalIgnoreCase);
+        var codes = CommonLanguages.Select(x => x.Code)
+            .Concat(_model?.Languages ?? new List<string>())
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in codes)
+            yield return (c, names.TryGetValue(c, out var n) ? n : c);
+    }
+
+    private void ToggleLanguage(string code, bool on)
+    {
+        if (_model is null) return;
+        if (on)
+        {
+            if (!_model.Languages.Contains(code)) _model.Languages.Add(code);
+        }
+        else
+        {
+            _model.Languages.Remove(code);
+        }
+        if (!_model.Languages.Contains(_model.DefaultLanguage))
+            _model.DefaultLanguage = _model.Languages.FirstOrDefault() ?? "vi";
+    }
+
+    private void AddCustomLanguage()
+    {
+        if (_model is null) return;
+        var code = _customLang?.Trim().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(code) && !_model.Languages.Contains(code))
+            _model.Languages.Add(code);
+        _customLang = null;
+    }
+
+    private static List<string> ParseLanguages(string? json, string fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(json))
+        {
+            try
+            {
+                var list = JsonSerializer.Deserialize<List<string>>(json);
+                if (list is { Count: > 0 })
+                    return list.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).Distinct().ToList();
+            }
+            catch (JsonException) { /* fall through */ }
+        }
+        return new List<string> { string.IsNullOrWhiteSpace(fallback) ? "vi" : fallback };
+    }
 
     protected override async Task OnParametersSetAsync()
     {
         if (IsNew)
         {
-            _model = new SiteFormModel { DbType = "SqlServer", DefaultLanguage = "vi", IsActive = true };
+            _model = new SiteFormModel { DbType = "SqlServer", DefaultLanguage = "vi", IsActive = true, Languages = new List<string> { "vi" } };
             return;
         }
 
@@ -153,6 +235,7 @@ else
             Description = site.Description,
             DbType = site.DbType,
             DefaultLanguage = site.DefaultLanguage,
+            Languages = ParseLanguages(site.SupportedLanguagesJson, site.DefaultLanguage),
             DefaultTone = site.DefaultTone,
             SystemPrompt = site.SystemPrompt,
             IsActive = site.IsActive,
@@ -218,6 +301,16 @@ else
                 return;
             }
 
+            // Languages: at least one; ensure primary is part of the set.
+            if (_model.Languages.Count == 0)
+            {
+                Toast.ShowError("Chọn ít nhất một ngôn ngữ hỗ trợ.");
+                return;
+            }
+            if (!_model.Languages.Contains(_model.DefaultLanguage))
+                _model.DefaultLanguage = _model.Languages[0];
+            var languagesJson = JsonSerializer.Serialize(_model.Languages);
+
             var now = DateTime.UtcNow;
 
             if (IsNew)
@@ -248,6 +341,7 @@ else
                     Description = NullIfBlank(_model.Description),
                     DbType = _model.DbType,
                     DefaultLanguage = string.IsNullOrWhiteSpace(_model.DefaultLanguage) ? "vi" : _model.DefaultLanguage.Trim(),
+                    SupportedLanguagesJson = languagesJson,
                     DefaultTone = NullIfBlank(_model.DefaultTone),
                     SystemPrompt = NullIfBlank(_model.SystemPrompt),
                     IsActive = _model.IsActive,
@@ -279,6 +373,7 @@ else
                 site.Description = NullIfBlank(_model.Description);
                 site.DbType = _model.DbType;
                 site.DefaultLanguage = string.IsNullOrWhiteSpace(_model.DefaultLanguage) ? "vi" : _model.DefaultLanguage.Trim();
+                site.SupportedLanguagesJson = languagesJson;
                 site.DefaultTone = NullIfBlank(_model.DefaultTone);
                 site.SystemPrompt = NullIfBlank(_model.SystemPrompt);
                 site.IsActive = _model.IsActive;
@@ -336,6 +431,9 @@ else
 
         [StringLength(10)]
         public string DefaultLanguage { get; set; } = "vi";
+
+        /// <summary>Supported language codes for this site (primary = DefaultLanguage).</summary>
+        public List<string> Languages { get; set; } = new() { "vi" };
 
         public string? DefaultTone { get; set; }
         public string? SystemPrompt { get; set; }
