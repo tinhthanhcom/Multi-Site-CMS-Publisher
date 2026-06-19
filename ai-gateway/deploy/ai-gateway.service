@@ -1,0 +1,33 @@
+# systemd unit for running ai-gateway directly on a VPS (non-Docker).
+# Install: copy to /etc/systemd/system/ai-gateway.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ai-gateway
+# Secrets live in /etc/ai-gateway/ai-gateway.env (chmod 600, root-owned).
+
+[Unit]
+Description=AI Gateway (codex CLI + Claude/Gemini fallback)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aigw
+Group=aigw
+WorkingDirectory=/opt/ai-gateway
+EnvironmentFile=/etc/ai-gateway/ai-gateway.env
+ExecStart=/usr/bin/node /opt/ai-gateway/dist/server.js
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# codex needs a writable HOME for its config/cache (CODEX_HOME) — allow only that.
+Environment=CODEX_HOME=/opt/ai-gateway/.codex
+ReadWritePaths=/opt/ai-gateway/.codex
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

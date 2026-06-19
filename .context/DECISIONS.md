@@ -55,6 +55,20 @@
   - FK không-cascade đặt `DeleteBehavior.Restrict` để tránh multiple-cascade-path của SQL Server
   - Connection string site mã hóa AES-256-GCM; key từ env `PUBLISHER_ENCRYPTION_KEY` (dev fallback `Encryption:Key` trong `appsettings.Development.json`, file này gitignored — xem `appsettings.Development.json.example`)
 
+### D-006: AI Phase 4 — gọi qua dịch vụ "AI Gateway" riêng (wrap codex CLI), Claude/Gemini là fallback
+- Date: 2026-06-19
+- Status: accepted
+- Why:
+  - Muốn dùng **codex CLI** làm nguồn sinh nội dung chính (chạy headless `codex exec --json --sandbox read-only --ask-for-approval never`), tận dụng hạ tầng sẵn có thay vì trả phí token API trực tiếp
+  - Đặt chuỗi fallback (codex → Claude → Gemini) **bên trong dịch vụ** (unified gateway) → CMS chỉ gọi 1 endpoint, đổi provider không phải sửa CMS
+  - Tách dịch vụ ra VPS riêng + domain riêng để cô lập runtime Node/codex khỏi app .NET
+- Consequence:
+  - Repo/thư mục mới `ai-gateway/` (Node 20 + TypeScript + Fastify); KHÔNG nằm trong solution .NET, có thể tách repo riêng sau
+  - API v1: `POST /v1/generate` (JSON request/response, **không streaming** ở v1 vì codex chỉ stream mức message), trả bản gốc + tất cả bản dịch trong 1 response; auth Bearer token
+  - CMS Phase 4 gọi gateway qua typed `HttpClient` (`IAIContentService`), key từ env `PUBLISHER_AIGATEWAY_KEY`
+  - Rủi ro: codex là coding agent (overhead/latency) → nếu cần đổi CodexProvider sang OpenAI API trực tiếp mà không đụng CMS; pin version `@openai/codex`
+  - Plan đầy đủ: `C:\Users\trung\.claude\plans\memoized-mixing-kahn.md`
+
 ## When To Add A New Decision
 
 Thêm decision mới khi có thay đổi ở một trong các nhóm sau:
