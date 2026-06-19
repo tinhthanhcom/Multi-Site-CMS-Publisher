@@ -14,3 +14,4 @@
 [2026-06-18] fix(web): thêm `@using Publisher.Core.Models` vào `SiteEdit.razor` (race giữa agent song song gây CS0246).
 [2026-06-18] chore(config): trỏ AppDb sang SQL Server `localhost/01MultiSiteCMS` (instance mặc định, Windows auth). AppDbContextFactory đọc env `ConnectionStrings__AppDb` (mặc định DB mới). Áp migration: 7 bảng + 2 view + 2 proc; app start OK, seed (admin + prompt templates) đã ghi, /login=200.
 [2026-06-18] chore(git): review (build sạch, 56/56 test pass) rồi merge `feature/phases-1-3-foundation` vào `main` (--no-ff, commit fcb2b17). Chưa push origin.
+[2026-06-19] docs: rà soát Phase 3 (đối chiếu DoD: post editor/PostPublisher/publish-schedule-retry đều có code + E2E pass) → kết luận hoàn thiện; tổng hợp scope Phase 4 (AIContentGenerator streaming, Prompt Template Manager, AI trong editor, kiểm soát token) từ deployment-plan.md. Lưu ý 2 việc treo: chưa push origin, chưa xóa nhánh feature.

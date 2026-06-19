@@ -16,9 +16,9 @@
 
 ## Recent Context
 
+- 2026-06-19: Rà soát Phase 3 đối chiếu DoD → kết luận hoàn thiện (code + E2E pass); tổng hợp scope Phase 4 (AI streaming, prompt templates, AI trong editor, token). Treo: chưa push origin, chưa xóa nhánh feature.
 - 2026-06-18: Trỏ AppDb sang `localhost/01MultiSiteCMS`, áp migration (7 bảng + 2 view + 2 proc), seed OK, app start + /login=200.
 - 2026-06-18: Review (build sạch, 56/56 test) rồi merge nhánh Phase 1-3 vào `main` (--no-ff, commit fcb2b17). Chưa push origin.
-- 2026-06-18: E2E verify: publish vào `TargetSiteDemo.dbo.Articles` trên LocalDB, capture RemotePostId, injection bị chặn.
 
 ## Next Recommended Moves
 
