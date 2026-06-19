@@ -69,6 +69,19 @@
   - Rủi ro: codex là coding agent (overhead/latency) → nếu cần đổi CodexProvider sang OpenAI API trực tiếp mà không đụng CMS; pin version `@openai/codex`
   - Plan đầy đủ: `C:\Users\trung\.claude\plans\memoized-mixing-kahn.md`
 
+### D-007: Đa ngôn ngữ — mỗi ngôn ngữ 1 Post (nhóm), DB site dùng cột-theo-ngôn-ngữ
+- Date: 2026-06-19
+- Status: accepted
+- Why:
+  - 1 site hỗ trợ nhiều ngôn ngữ; DB site đích lưu mỗi field bản địa hoá ở cột riêng theo ngôn ngữ (vd `title_vi`, `title_en`)
+  - AppDB lưu mỗi ngôn ngữ là 1 `Post` riêng, gom bằng `TranslationGroupId` (dễ soạn/AI theo từng ngôn ngữ)
+  - UI posts/new dùng tabs theo ngôn ngữ
+- Consequence:
+  - Schema: `Site.SupportedLanguagesJson`, `Post.Language`+`TranslationGroupId` (index), `SiteFieldMapping.LocalizedColumnsJson` (field→lang→column). Migration `AddMultiLanguage`.
+  - Publish: site có `LocalizedColumnsJson` → gom cả nhóm dịch thành **1 INSERT** (cột theo ngôn ngữ) qua `InsertCommandBuilder.BuildLocalized`; lưu `RemotePostId`+status cho mọi Post trong nhóm. Site đơn ngôn ngữ giữ luồng `Build()` cũ.
+  - Hệ quả: publish thao tác trên cả nhóm (1 dòng remote chung) → không publish độc lập từng ngôn ngữ; thêm ngôn ngữ sau khi published cần UPDATE (ngoài v1).
+  - UI: SiteEdit chọn nhiều ngôn ngữ + ngôn ngữ chính; SiteMapping ma trận cột-theo-ngôn-ngữ; PostEditor tabs + 1 Quill editor/ngôn ngữ; "AI Viết" sinh gốc + dịch lấp tab.
+
 ## When To Add A New Decision
 
 Thêm decision mới khi có thay đổi ở một trong các nhóm sau:
